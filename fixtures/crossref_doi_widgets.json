@@ -1,0 +1,7 @@
+{"message": {"title": ["A Study of Widgets in the Wild"],
+  "author": [{"given": "J.", "family": "Doe"}],
+  "DOI": "10.1145/3292500.3330701",
+  "URL": "https://doi.org/10.1145/3292500.3330701",
+  "issued": {"date-parts": [[2019, 8, 4]]},
+  "container-title": ["Proceedings of KDD '19"],
+  "subject": ["Human-Computer Interaction"], "type": "proceedings-article"}}

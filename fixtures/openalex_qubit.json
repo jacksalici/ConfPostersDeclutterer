@@ -1,0 +1,18 @@
+{"results": [
+ {"id": "https://openalex.org/W2741809807",
+  "doi": "https://doi.org/10.1103/physrevx.13.041020",
+  "display_name": "Superconducting Qubit Readout with Travelling-Wave Amplifiers",
+  "publication_date": "2023-12-15",
+  "publication_year": 2023,
+  "authorships": [{"author": {"display_name": "M. Dubois"}},
+                  {"author": {"display_name": "L. Chen"}}],
+  "abstract_inverted_index": {"We": [0], "characterise": [1], "a": [2], "readout": [3], "chain.": [4]},
+  "primary_location": {"landing_page_url": "https://example.org/qubit",
+                       "source": {"display_name": "Physical Review X"}},
+  "best_oa_location": {"pdf_url": "https://example.org/qubit.pdf"},
+  "primary_topic": {"display_name": "Quantum Information and Cryptography", "score": 0.98,
+                    "subfield": {"display_name": "Artificial Intelligence"},
+                    "field": {"display_name": "Computer Science"}}},
+ {"id": "https://openalex.org/W999", "display_name": "Something else entirely",
+  "publication_year": 2020, "authorships": [], "primary_topic": null}
+]}

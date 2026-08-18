@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <entry>
+    <id>http://arxiv.org/abs/2312.09876v2</id>
+    <published>2023-12-15T08:30:00Z</published>
+    <title>Superconducting Qubit Readout with Travelling-Wave Amplifiers</title>
+    <summary>We characterise a superconducting qubit readout chain based on a
+    travelling-wave parametric amplifier and report reduced decoherence.</summary>
+    <author><name>M. Dubois</name></author>
+    <author><name>L. Chen</name></author>
+    <link title="pdf" href="http://arxiv.org/pdf/2312.09876v2" rel="related" type="application/pdf"/>
+    <arxiv:primary_category xmlns:arxiv="http://arxiv.org/schemas/atom" term="quant-ph"/>
+    <category term="quant-ph" scheme="http://arxiv.org/schemas/atom"/>
+  </entry>
+</feed>

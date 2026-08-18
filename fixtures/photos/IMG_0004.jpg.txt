@@ -1,0 +1,6 @@
+A Study of Widgets in the Wild
+J. Doe, K. Smith
+Widget Research Group, University of Somewhere
+Introduction
+We study widgets in the wild and report on their behaviour under load.
+Full paper: doi 10.1145/3292500.3330701

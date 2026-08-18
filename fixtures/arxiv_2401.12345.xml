@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <entry>
+    <id>http://arxiv.org/abs/2401.12345v1</id>
+    <published>2024-01-22T10:00:00Z</published>
+    <title>Deep Sets for Jet Flavour Tagging at the LHC</title>
+    <summary>We present a permutation-invariant deep learning architecture for jet
+    flavour tagging in high-pileup collider environments, and show that it improves
+    trigger efficiency relative to sequential baselines.</summary>
+    <author><name>A. Rossi</name></author>
+    <author><name>B. Bianchi</name></author>
+    <author><name>C. Verdi</name></author>
+    <link href="http://arxiv.org/abs/2401.12345v1" rel="alternate" type="text/html"/>
+    <link title="pdf" href="http://arxiv.org/pdf/2401.12345v1" rel="related" type="application/pdf"/>
+    <arxiv:primary_category xmlns:arxiv="http://arxiv.org/schemas/atom" term="hep-ex"/>
+    <category term="hep-ex" scheme="http://arxiv.org/schemas/atom"/>
+    <category term="cs.LG" scheme="http://arxiv.org/schemas/atom"/>
+  </entry>
+</feed>

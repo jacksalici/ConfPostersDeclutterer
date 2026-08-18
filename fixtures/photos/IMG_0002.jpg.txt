@@ -1,0 +1,8 @@
+Superconducting Qubit Readout with Travelling-Wave Amplifiers
+M. Dubois, L. Chen
+Institute for Quantum Optics, ETH Zurich
+Introduction
+We characterise a qubit readout chain using entanglement witnesses and report
+reduced decoherence in the quantum circuit at millikelvin temperatures.
+Conclusions
+The quantum computer stack benefits from lower readout noise.
