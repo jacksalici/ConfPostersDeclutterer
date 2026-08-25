@@ -88,9 +88,11 @@ by path, size and mtime.
 
 ```
 report/
-├── report.html          self-contained page, clustered by subfield, light+dark
+├── report.html          poster thumbnails, clustered by subfield, light+dark
 ├── report.md            same content as Markdown
-├── report.json          every field, for further processing
+├── report.json          every field, including all the provenance
+├── unmatched.csv        the posters with no paper — fill in links, then --merge
+├── thumbs/              the images the HTML report shows
 ├── organise-plan.txt    what --organise would do (dry run is the default)
 ├── photos/              only with --organise copy|move|symlink
 │   └── quantum-physics/superconducting-qubit-readout.jpg
@@ -100,11 +102,58 @@ report/
     └── posters.json     the finished records
 ```
 
+The report tells you what the poster was, not how the tool got there: no match
+scores, no "found via crossref", no confidences. All of that is kept — it is in
+`report.json`, and `--verbose` narrates it live.
+
+The HTML report shows each poster photo. `--thumbnails files` (the default)
+writes downscaled copies into `thumbs/` and links them, so the page stays small
+and the folder stays portable; `--thumbnails embed` inlines them for a single
+self-contained file; `--thumbnails none` leaves them out. Thumbnails are made
+with `sips`, which ships with macOS; without it the report links the full photos
+instead.
+
+## Filling the gaps by hand
+
+Some posters will not be found — the paper is not indexed, the photo is blurred,
+the title is a pun. Every run writes `unmatched.csv` listing exactly those:
+
+```csv
+image,title,link,subfield,note
+IMG_0421.jpg,An Ethnography of Poster Sessions,,,
+IMG_0605.jpg,,,,no text recognised - is this a poster photo?
+```
+
+Paste a link into the `link` column — an arXiv URL, a DOI, an OpenAlex ID, a bare
+`2401.12345`, or any URL at all — and hand it back:
+
+```bash
+python3 -m posterdeclutter run ./photos -o ./report --merge ./report/unmatched.csv
+```
+
+Recognised identifiers are looked up and fill in authors, venue, abstract and
+subfield like any other match. Any other URL is analysed too: pages that ship
+citation metadata — CVF Open Access, ACL Anthology, most publisher landing
+pages — hand over their title, authors, keywords and venue, and a CVF paper
+PDF is read through its HTML abstract page. The merged poster leaves
+`unmatched.csv` and its "Paper not found" entry in the report is replaced by
+the real thing. A link that yields nothing (a lab page, an unreadable PDF) is
+kept exactly as you gave it, so nothing is lost. You can also correct `title`
+— a corrected title is searched again, which is often all it takes — or set
+`subfield` to override the clustering, or leave a `note`.
+
+Manual rows win over everything, and skip the title-agreement check: you looked
+at the poster and the tool did not. They are saved with the rest of the state, so
+later runs keep them without `--merge`. Each run rewrites `unmatched.csv` with
+only what is *still* missing, so the file shrinks as you work through it.
+
 ## Other options worth knowing
 
 | Flag | |
 |---|---|
 | `--organise plan\|copy\|move\|symlink` | file the photos by subfield and title. `plan` (default) only writes the plan |
+| `--merge <csv>` | apply manual links (see above) |
+| `--thumbnails files\|embed\|none` | poster images in the HTML report |
 | `--conference "NeurIPS 2026"` | title for the report header |
 | `--threshold 0.72` | how sure a title match must be |
 | `--llm off\|api\|claude-cli\|codex-cli` | see below |

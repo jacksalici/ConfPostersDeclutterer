@@ -282,6 +282,17 @@ class Pipeline:
 
     # -- the run -----------------------------------------------------------
 
+    def persist(self, posters: List[Poster]) -> None:
+        """Write the records back, so a later resume keeps merged edits."""
+        state_path = self.cache_dir / "posters.json"
+        done = {}
+        if state_path.exists():
+            for item in json.loads(state_path.read_text(encoding="utf-8")):
+                done[item["image"]] = Poster.from_dict(item)
+        for poster in posters:
+            done[poster.image] = poster
+        self._save(state_path, done)
+
     @staticmethod
     def _save(path: Path, done: Dict[str, Poster]) -> None:
         path.write_text(json.dumps([p.to_dict() for p in done.values()], indent=2),

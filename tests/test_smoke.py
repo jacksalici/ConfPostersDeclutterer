@@ -14,8 +14,8 @@ from pathlib import Path
 
 from tests.helpers import FIXTURES, copy_photos, seed, seed_all
 
-from posterdeclutter import (arxiv, crossref, llm, ocr, openalex, report,
-                             sources, subfields, titles, util)
+from posterdeclutter import (arxiv, crossref, llm, manual, ocr, openalex, report,
+                             sources, subfields, thumbs, titles, util, webpage)
 from posterdeclutter.cli import main
 from posterdeclutter.http import Fetcher
 from posterdeclutter.log import QUIET, VERBOSE, Log, from_flags, human_time
@@ -297,7 +297,62 @@ class TestCrossrefSource(unittest.TestCase):
         self.assertIn("widgets", work.summary)
 
 
-class TestSourceSelection(unittest.TestCase):
+class TestWebpageSource(unittest.TestCase):
+    """Pasted links that are not arXiv ids or DOIs still carry metadata."""
+
+    ACL = "https://aclanthology.org/2026.icml-main.1/"
+    CVF_PDF = ("https://openaccess.thecvf.com/content/ICCV2025/papers/"
+               "Dumeny_Counting_Stacked_Objects_ICCV2025_paper.pdf")
+    CVF_HTML = ("https://openaccess.thecvf.com/content/ICCV2025/html/"
+                "Dumeny_Counting_Stacked_Objects_ICCV2025_paper.html")
+
+    def test_meta_tags_parse_with_either_quote_style(self):
+        metas = webpage._meta_tags(
+            '<meta name="citation_title" content="A Title">'
+            "<meta name='citation_author' content='Ada'>"
+            '<meta property="og:description" content="desc">'
+            '<meta charset="utf-8">')
+        self.assertEqual(metas["citation_title"], ["A Title"])
+        self.assertEqual(metas["citation_author"], ["Ada"])
+        self.assertEqual(metas["og:description"], ["desc"])
+        self.assertNotIn("charset", metas)
+
+    def test_a_landing_page_yields_title_authors_keywords_and_venue(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            seed(Path(tmp), self.ACL, "acl_abstract.html")
+            work = webpage.resolve(fetcher(Path(tmp)), self.ACL)
+            self.assertEqual(work.source, "web")
+            self.assertEqual(work.title,
+                             "Learning Coupled Continuous-Time Latent Dynamics")
+            self.assertEqual(work.authors, ["Lovelace, Ada", "Hopper, Grace"])
+            self.assertEqual(work.categories,
+                             ["model merging", "continuous-time models"])
+            self.assertEqual(work.subject, "model merging")
+            self.assertIn("Machine Learning", work.venue)
+            self.assertEqual(work.published, "2026")
+            self.assertTrue(work.summary.startswith("We study latent dynamics"))
+
+    def test_a_cvf_paper_pdf_is_read_via_its_html_page(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            seed(Path(tmp), self.CVF_HTML, "cvf_abstract.html")
+            work = webpage.resolve(fetcher(Path(tmp)), self.CVF_PDF)
+            self.assertEqual(work.source, "web")
+            self.assertEqual(work.title, "Counting Stacked Objects with Depth Carving")
+            self.assertEqual(work.authors, ["Dumeny, Nin", "Ette, Noa", "Fua, Pascal"])
+            self.assertEqual(work.venue,
+                             "IEEE/CVF International Conference on Computer Vision")
+            self.assertEqual(work.published, "2025")
+            self.assertTrue(work.summary.startswith("Objects in bulk"))
+
+    def test_an_unreadable_page_resolves_to_nothing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            f = fetcher(Path(tmp))       # offline, nothing seeded
+            self.assertIsNone(webpage.resolve(f, self.ACL))
+            self.assertIsNone(webpage.resolve(
+                f, "https://example.org/paper.pdf"))   # a bare PDF: never fetched
+
+
+
     def test_parse_names_validates(self):
         self.assertEqual(sources.parse_names("arxiv, openalex"), ["arxiv", "openalex"])
         self.assertEqual(sources.parse_names(""), list(sources.DEFAULT))
@@ -575,7 +630,6 @@ class TestPipelineEndToEnd(unittest.TestCase):
         markdown = report.render_markdown(posters, "TestConf 2026")
         self.assertIn("# Poster report - TestConf 2026", markdown)
         self.assertIn("arxiv.org/abs/2401.12345v1", markdown)
-        self.assertIn("via crossref", markdown)
         self.assertIn("Proceedings of KDD", markdown)
         self.assertIn("## Unclassified", markdown)
 
@@ -583,6 +637,20 @@ class TestPipelineEndToEnd(unittest.TestCase):
         self.assertTrue(page.startswith("<!doctype html>"))
         self.assertIn("Human-Computer Interaction", page)
         self.assertNotIn("<script", page)
+
+    def test_reports_leave_the_machinery_out(self):
+        posters = self._run()
+        for rendered in (report.render_markdown(posters), report.render_html(posters)):
+            for noise in ("match 1.00", "title-search", "id-on-poster", "confidence",
+                          "via keywords", "via arxiv", "via crossref", "best score"):
+                self.assertNotIn(noise, rendered, noise)
+        # ...but report.json keeps every field, for a second pass or a bug hunt.
+        report.write_json(posters, self.out / "report.json")
+        payload = json.loads((self.out / "report.json").read_text())
+        jets = payload["clusters"]["High Energy Physics - Experiment"][0]
+        self.assertEqual(jets["match_how"], "id-on-poster")
+        self.assertEqual(jets["subfield_source"], "arxiv")
+        self.assertEqual(jets["match_score"], 1.0)
 
     def test_unclassified_cluster_sorts_last(self):
         self.assertEqual(list(report.cluster(self._run()))[-1], subfields.UNCLASSIFIED)
@@ -774,6 +842,221 @@ class TestBatchedAssistInThePipeline(unittest.TestCase):
         self.assertIn("need: title, subfield", model.prompts[0])
 
 
+class TestManualRoundTrip(unittest.TestCase):
+    """Export what could not be matched, paste in links, merge them back."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tmp = Path(self._tmp.name)
+        self.photos = copy_photos(self.tmp / "photos")
+        self.out = self.tmp / "out"
+        web = self.out / "cache" / "web"
+        self.fetcher = Fetcher(web, offline=True)
+        seed_all(web, self.fetcher)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _posters(self):
+        pipeline = Pipeline(cache_dir=self.out / "cache", backend="sidecar", offline=True,
+                            source_names=["arxiv", "openalex", "crossref"], log=Log(QUIET))
+        self.pipeline = pipeline
+        return pipeline.run(ocr.find_images(self.photos))
+
+    def test_link_parsing_covers_the_forms_people_paste(self):
+        self.assertEqual(manual.parse_link("https://arxiv.org/abs/2401.12345v2"),
+                         ("arxiv", "2401.12345"))
+        self.assertEqual(manual.parse_link("arxiv.org/pdf/hep-ex/0123456"),
+                         ("arxiv", "hep-ex/0123456"))          # pre-2007 identifier
+        self.assertEqual(manual.parse_link("2401.12345"), ("arxiv", "2401.12345"))
+        self.assertEqual(manual.parse_link("https://doi.org/10.1038/s41586-021-03819-2"),
+                         ("doi", "10.1038/s41586-021-03819-2"))
+        self.assertEqual(manual.parse_link("10.1145/3292500.3330701"),
+                         ("doi", "10.1145/3292500.3330701"))
+        self.assertEqual(manual.parse_link("https://openalex.org/W2741809807"),
+                         ("openalex", "W2741809807"))
+        self.assertEqual(manual.parse_link("https://aclanthology.org/2020.acl-main.1/"),
+                         ("url", "https://aclanthology.org/2020.acl-main.1/"))
+        self.assertIsNone(manual.parse_link(""))
+        self.assertIsNone(manual.parse_link("I could not find it"))
+
+    def test_only_the_unmatched_are_exported(self):
+        posters = self._posters()
+        path = self.out / "unmatched.csv"
+        count = manual.write_unmatched(posters, path)
+        self.assertEqual(count, 2)
+        rows = manual.read(path)
+        self.assertEqual({r["image"] for r in rows}, {"IMG_0003.jpg", "IMG_0005.jpg"})
+        # Prefilled with what we know, blank where the human is meant to write.
+        ethnography = next(r for r in rows if r["image"] == "IMG_0005.jpg")
+        self.assertEqual(ethnography["title"], "An Ethnography of Poster Sessions")
+        self.assertEqual(ethnography["link"], "")
+
+    def test_a_pasted_link_is_resolved_and_wins(self):
+        posters = self._posters()
+        rows = [{"image": "IMG_0005.jpg", "title": "", "link": "https://arxiv.org/abs/2401.12345",
+                 "subfield": "", "note": ""}]
+        changed = manual.merge(posters, rows, self.fetcher, classify=self.pipeline.classify)
+        self.assertEqual(changed, 1)
+        poster = {Path(p.image).name: p for p in posters}["IMG_0005.jpg"]
+        self.assertEqual(poster.work["ident"], "2401.12345v1")
+        self.assertEqual(poster.match_source, "manual")
+        # No title-agreement check: the human looked at the poster, we did not.
+        self.assertEqual(poster.title, "Deep Sets for Jet Flavour Tagging at the LHC")
+        self.assertEqual(poster.subfield, "High Energy Physics - Experiment")
+
+    def test_a_link_we_cannot_resolve_is_still_kept_as_given(self):
+        posters = self._posters()
+        rows = [{"image": "IMG_0005.jpg", "title": "An Ethnography of Poster Sessions",
+                 "link": "https://aclanthology.org/2020.acl-main.1/", "subfield": "", "note": ""}]
+        manual.merge(posters, rows, self.fetcher)
+        poster = {Path(p.image).name: p for p in posters}["IMG_0005.jpg"]
+        self.assertEqual(poster.work["source"], "manual")
+        self.assertEqual(poster.work["url"], "https://aclanthology.org/2020.acl-main.1/")
+        self.assertEqual(poster.work["title"], "An Ethnography of Poster Sessions")
+
+    def test_a_corrected_title_and_subfield_are_honoured(self):
+        posters = self._posters()
+        rows = [{"image": "IMG_0003.jpg", "title": "Galaxy Cluster Mass Calibration",
+                 "link": "", "subfield": "Astrophysics", "note": "back row, poor light"}]
+        manual.merge(posters, rows, self.fetcher, classify=self.pipeline.classify)
+        poster = {Path(p.image).name: p for p in posters}["IMG_0003.jpg"]
+        self.assertEqual(poster.title, "Galaxy Cluster Mass Calibration")
+        self.assertEqual(poster.subfield, "Astrophysics")
+        self.assertEqual(poster.subfield_source, "manual")
+        self.assertTrue(any("back row" in n for n in poster.notes))
+
+    def test_a_nonsense_link_warns_instead_of_silently_doing_nothing(self):
+        import io
+        posters = self._posters()
+        stream = io.StringIO()
+        rows = [{"image": "IMG_0005.jpg", "title": "", "link": "ask Marco",
+                 "subfield": "", "note": ""}]
+        manual.merge(posters, rows, self.fetcher, log=Log(QUIET, stream))
+        self.assertIn("could not make sense of the link", stream.getvalue())
+        poster = {Path(p.image).name: p for p in posters}["IMG_0005.jpg"]
+        self.assertIsNone(poster.work)
+        self.assertTrue(any("not understood" in n for n in poster.notes))
+
+    def test_a_row_naming_an_unknown_photo_is_reported(self):
+        import io
+        posters = self._posters()
+        stream = io.StringIO()
+        rows = [{"image": "IMG_9999.jpg", "title": "", "link": "2401.12345",
+                 "subfield": "", "note": ""}]
+        changed = manual.merge(posters, rows, self.fetcher, log=Log(QUIET, stream))
+        self.assertEqual(changed, 0)
+        self.assertIn("not in this run", stream.getvalue())
+
+    def test_the_export_shrinks_as_links_are_supplied(self):
+        posters = self._posters()
+        self.assertEqual(manual.write_unmatched(posters, self.out / "unmatched.csv"), 2)
+        manual.merge(posters, [{"image": "IMG_0005.jpg", "title": "", "subfield": "", "note": "",
+                                "link": "https://arxiv.org/abs/2401.12345"}], self.fetcher)
+        self.assertEqual(manual.write_unmatched(posters, self.out / "unmatched.csv"), 1)
+
+    ACL = "https://aclanthology.org/2026.icml-main.1/"
+
+    def _seed_webpage(self):
+        seed(self.out / "cache" / "web", self.ACL, "acl_abstract.html")
+
+    @staticmethod
+    def _section(markdown, image_name):
+        """One poster's markdown entry: from its Photo line to the next heading."""
+        start = markdown.index("Photo: `%s`" % image_name)
+        end = markdown.find("### ", start)
+        return markdown[start:] if end == -1 else markdown[start:end]
+
+    def test_an_analysed_link_brings_title_authors_and_category(self):
+        posters = self._posters()
+        rows = [{"image": "IMG_0003.jpg",
+                 "title": "Learning Coupled Continuous-Time Latent Dynamics ICML",
+                 "link": self.ACL, "subfield": "", "note": ""}]
+        self._seed_webpage()
+        changed = manual.merge(posters, rows, self.fetcher,
+                               classify=self.pipeline.classify)
+        self.assertEqual(changed, 1)
+        poster = {Path(p.image).name: p for p in posters}["IMG_0003.jpg"]
+        # The title is re-obtained from the link, not trusted from the OCR.
+        self.assertEqual(poster.title,
+                         "Learning Coupled Continuous-Time Latent Dynamics")
+        self.assertEqual(poster.work["source"], "web")
+        self.assertEqual(poster.work["authors"], ["Lovelace, Ada", "Hopper, Grace"])
+        self.assertEqual(poster.subfield, "model merging")
+        self.assertEqual(poster.subfield_source, "index")
+        # ...and it leaves the export: no longer a paper-not-found case.
+        self.assertEqual(manual.write_unmatched(
+            posters, self.out / "unmatched.csv"), 1)
+
+    def test_a_merged_link_replaces_the_paper_not_found_entry_in_the_report(self):
+        posters = self._posters()
+        self.assertIn("- Paper: not found",
+                      self._section(report.render_markdown(posters), "IMG_0003.jpg"))
+        rows = [{"image": "IMG_0003.jpg", "title": "", "link": self.ACL,
+                 "subfield": "", "note": ""}]
+        self._seed_webpage()
+        manual.merge(posters, rows, self.fetcher, classify=self.pipeline.classify)
+        section = self._section(report.render_markdown(posters), "IMG_0003.jpg")
+        self.assertIn("aclanthology.org/2026.icml-main.1/", section)
+        self.assertIn("Lovelace", section)
+        self.assertNotIn("not found", section)
+
+
+class TestPosterImagesInTheReport(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tmp = Path(self._tmp.name)
+        self.photos = copy_photos(self.tmp / "photos")
+        self.out = self.tmp / "out"
+        self.out.mkdir(parents=True)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _fake(self, name="IMG_0001.jpg"):
+        from posterdeclutter.pipeline import Poster
+        return [Poster(image=str(self.photos / name), title="A Poster")]
+
+    @unittest.skipUnless(thumbs.available(), "needs sips (macOS)")
+    def test_files_mode_writes_thumbnails_and_links_them_relatively(self):
+        posters = self._fake()
+        images = thumbs.prepare(posters, self.out, mode="files")
+        src = images[posters[0].image]
+        self.assertTrue(src.startswith("thumbs/"), src)
+        thumb = self.out / src
+        self.assertTrue(thumb.exists())
+        # A thumbnail must never be larger than the photo it stands in for.
+        self.assertLessEqual(thumb.stat().st_size, Path(posters[0].image).stat().st_size * 2)
+
+        page = report.render_html(posters, images=images)
+        self.assertIn("<img loading=lazy src='%s'" % src, page)
+        self.assertIn("class=shot", page)
+
+    @unittest.skipUnless(thumbs.available(), "needs sips (macOS)")
+    def test_embed_mode_produces_a_single_self_contained_page(self):
+        posters = self._fake()
+        images = thumbs.prepare(posters, self.out, mode="embed")
+        self.assertTrue(images[posters[0].image].startswith("data:image/"))
+        page = report.render_html(posters, images=images)
+        self.assertIn("src='data:image/", page)
+
+    def test_none_mode_leaves_the_page_without_images(self):
+        posters = self._fake()
+        self.assertEqual(thumbs.prepare(posters, self.out, mode="none"), {})
+        page = report.render_html(posters, images={})
+        self.assertNotIn("<img", page)
+        self.assertIn("noshot", page)
+
+    def test_an_unknown_mode_is_rejected(self):
+        with self.assertRaises(ValueError):
+            thumbs.prepare(self._fake(), self.out, mode="gigantic")
+
+    def test_a_missing_photo_is_skipped_not_crashed_on(self):
+        from posterdeclutter.pipeline import Poster
+        posters = [Poster(image=str(self.photos / "gone.jpg"), title="Vanished")]
+        self.assertEqual(thumbs.prepare(posters, self.out, mode="files"), {})
+
+
 class TestCLI(unittest.TestCase):
     def _prepared(self, root: Path):
         photos = copy_photos(root / "photos")
@@ -845,6 +1128,84 @@ class TestCLI(unittest.TestCase):
             with contextlib.redirect_stderr(io.StringIO()):
                 with self.assertRaises(SystemExit):
                     main(["run", str(photos), "-o", str(out), "-v", "-q"])
+
+    def test_the_full_manual_round_trip_through_the_cli(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            photos, out = self._prepared(Path(tmp))
+            base = ["run", str(photos), "-o", str(out), "--ocr", "sidecar", "--offline",
+                    "--quiet", "--sources", "arxiv,openalex,crossref"]
+
+            self.assertEqual(main(base), 0)
+            csv_path = out / "unmatched.csv"
+            self.assertTrue(csv_path.exists())
+            rows = manual.read(csv_path)
+            self.assertEqual(len(rows), 2)
+
+            # The user pastes a link into the row for one of them.
+            for row in rows:
+                if row["image"] == "IMG_0005.jpg":
+                    row["link"] = "https://arxiv.org/abs/2401.12345"
+            with csv_path.open("w", newline="", encoding="utf-8") as handle:
+                import csv as csv_mod
+                writer = csv_mod.DictWriter(handle, fieldnames=manual.FIELDS)
+                writer.writeheader()
+                writer.writerows(rows)
+
+            self.assertEqual(main(base + ["--merge", str(csv_path)]), 0)
+            payload = json.loads((out / "report.json").read_text())
+            merged = [p for group in payload["clusters"].values() for p in group
+                      if Path(p["image"]).name == "IMG_0005.jpg"][0]
+            self.assertEqual(merged["match_source"], "manual")
+            self.assertEqual(merged["work"]["ident"], "2401.12345v1")
+            # The export now lists only what is still missing.
+            self.assertEqual(len(manual.read(csv_path)), 1)
+
+    def test_merged_edits_survive_a_later_resume(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            photos, out = self._prepared(Path(tmp))
+            base = ["run", str(photos), "-o", str(out), "--ocr", "sidecar",
+                    "--offline", "--quiet"]
+            main(base)
+            csv_path = out / "manual.csv"
+            csv_path.write_text("image,title,link,subfield,note\n"
+                                "IMG_0003.jpg,Galaxy Clusters,,Astrophysics,dim photo\n",
+                                encoding="utf-8")
+            main(base + ["--merge", str(csv_path)])
+            main(base)   # plain resume, no --merge this time
+            payload = json.loads((out / "report.json").read_text())
+            kept = [p for group in payload["clusters"].values() for p in group
+                    if Path(p["image"]).name == "IMG_0003.jpg"][0]
+            self.assertEqual(kept["title"], "Galaxy Clusters")
+            self.assertEqual(kept["subfield"], "Astrophysics")
+
+    def test_a_plain_re_run_resumes_instead_of_redoing_the_research(self):
+        import contextlib, io
+
+        with tempfile.TemporaryDirectory() as tmp:
+            photos, out = self._prepared(Path(tmp))
+            base = ["run", str(photos), "-o", str(out), "--ocr", "sidecar", "--offline"]
+            main(base + ["--quiet"])
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+                main(base)
+            self.assertIn("nothing to do", err.getvalue())
+
+    def test_a_missing_merge_file_fails_loudly(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            photos, out = self._prepared(Path(tmp))
+            self.assertEqual(main(["run", str(photos), "-o", str(out), "--ocr", "sidecar",
+                                   "--offline", "--quiet", "--merge",
+                                   str(Path(tmp) / "nope.csv")]), 1)
+
+    def test_thumbnails_land_next_to_the_report(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            photos, out = self._prepared(Path(tmp))
+            main(["run", str(photos), "-o", str(out), "--ocr", "sidecar", "--offline",
+                  "--quiet", "--thumbnails", "files"])
+            page = (out / "report.html").read_text()
+            if thumbs.available():
+                self.assertTrue((out / "thumbs").is_dir())
+                self.assertIn("<img loading=lazy src='thumbs/", page)
 
     def test_run_on_an_empty_folder_fails_loudly(self):
         with tempfile.TemporaryDirectory() as tmp:

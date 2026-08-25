@@ -7,7 +7,7 @@ import json
 from collections import OrderedDict
 from datetime import date
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from .subfields import UNCLASSIFIED
 
@@ -45,12 +45,12 @@ def write_json(posters: List, path: Path) -> Path:
 
 
 def render_markdown(posters: List, conference: str = "") -> str:
+    """The reader wants the paper, not the machinery that found it: scores,
+    match methods and confidences stay in report.json and in --verbose."""
     stats = _stats(posters)
     out = ["# Poster report%s" % (" - " + conference if conference else ""), ""]
-    out.append(
-        "%d posters - %d titles recovered, %d matched on arXiv, %d classified."
-        % (stats["posters"], stats["titled"], stats["linked"], stats["classified"])
-    )
+    out.append("%d posters - %d titles recovered, %d linked to a paper."
+               % (stats["posters"], stats["titled"], stats["linked"]))
     out.append("")
     groups = cluster(posters)
     out.append("## Contents")
@@ -62,8 +62,7 @@ def render_markdown(posters: List, conference: str = "") -> str:
         out.append("## %s" % name)
         out.append("")
         for poster in group:
-            title = poster.title or "*(no title recovered)*"
-            out.append("### %s" % title)
+            out.append("### %s" % (poster.title or "*(no title recovered)*"))
             out.append("")
             out.append("- Photo: `%s`" % Path(poster.image).name)
             if poster.work:
@@ -72,8 +71,7 @@ def render_markdown(posters: List, conference: str = "") -> str:
                 if len(work["authors"]) > 6:
                     authors += ", et al."
                 label = "arXiv:%s" % work["ident"] if work["source"] == "arxiv" else work["ident"]
-                out.append("- Paper: [%s](%s) via %s (%s, match %.2f)"
-                           % (label, work["url"], work["source"], poster.match_how, poster.match_score))
+                out.append("- Paper: [%s](%s)" % (label, work["url"]))
                 out.append("- Authors: %s" % (authors or "unknown"))
                 if work["venue"]:
                     out.append("- Venue: %s" % work["venue"])
@@ -89,10 +87,7 @@ def render_markdown(posters: List, conference: str = "") -> str:
                     out.append("")
                     out.append("> %s" % _clip(work["summary"], 420))
             else:
-                out.append("- Paper: no confident match (best score %.2f)" % poster.match_score)
-            out.append("- Subfield via %s (confidence %.2f)%s"
-                       % (poster.subfield_source, poster.subfield_confidence,
-                          ": " + ", ".join(poster.evidence) if poster.evidence else ""))
+                out.append("- Paper: not found")
             for note in poster.notes:
                 out.append("- Note: %s" % note)
             out.append("")
@@ -122,8 +117,18 @@ h2 { font-size:1.2rem; margin:2.6rem 0 .9rem; padding-bottom:.35rem;
 .toc a { text-decoration:none; font-size:.85rem; padding:.25rem .6rem; border:1px solid var(--line);
          border-radius:999px; color:var(--fg); background:var(--card); }
 .card { background:var(--card); border:1px solid var(--line); border-radius:10px;
-        padding:1rem 1.15rem; margin-bottom:.85rem; }
+        padding:1rem 1.15rem; margin-bottom:.85rem;
+        display:grid; grid-template-columns:auto 1fr; gap:1rem; align-items:start; }
+.card.noshot { grid-template-columns:1fr; }
+.shot { display:block; width:170px; border-radius:6px; border:1px solid var(--line);
+        background:var(--bg); }
+.shot img { display:block; width:100%; height:auto; border-radius:5px; }
+.body { min-width:0; }
 .card h3 { margin:0 0 .4rem; font-size:1.02rem; line-height:1.35; }
+@media (max-width: 34rem) {
+  .card { grid-template-columns:1fr; }
+  .shot { width:100%; max-width:22rem; }
+}
 .meta { color:var(--mut); font-size:.85rem; margin:.15rem 0; word-break:break-word; }
 .meta a { color:var(--accent); }
 .abstract { font-size:.88rem; color:var(--mut); margin:.6rem 0 0;
@@ -133,7 +138,13 @@ h2 { font-size:1.2rem; margin:2.6rem 0 .9rem; padding-bottom:.35rem;
 """
 
 
-def render_html(posters: List, conference: str = "") -> str:
+def render_html(posters: List, conference: str = "", images: Optional[dict] = None) -> str:
+    """Same restraint as the Markdown: the paper, not the machinery.
+
+    `images` maps a poster's image path to whatever the page should load - a
+    relative path to a thumbnail, or a data URI. See thumbs.prepare.
+    """
+    images = images or {}
     stats = _stats(posters)
     groups = cluster(posters)
     e = html.escape
@@ -143,8 +154,8 @@ def render_html(posters: List, conference: str = "") -> str:
         "<title>Poster report%s</title>" % (" - " + e(conference) if conference else ""),
         "<style>%s</style><main>" % _CSS,
         "<h1>Poster report%s</h1>" % (" &middot; " + e(conference) if conference else ""),
-        "<p class=lede>%d posters &middot; %d titles recovered &middot; %d matched on arXiv "
-        "&middot; %d classified</p>" % (stats["posters"], stats["titled"], stats["linked"], stats["classified"]),
+        "<p class=lede>%d posters &middot; %d titles recovered &middot; %d linked to a paper</p>"
+        % (stats["posters"], stats["titled"], stats["linked"]),
         "<ul class=toc>",
     ]
     for name, group in groups.items():
@@ -154,37 +165,42 @@ def render_html(posters: List, conference: str = "") -> str:
     for name, group in groups.items():
         parts.append("<h2 id='%s'>%s</h2>" % (_anchor(name), e(name)))
         for poster in group:
-            classes = "card" if poster.work else "card unmatched"
-            parts.append("<article class='%s'>" % classes)
+            shot = images.get(poster.image)
+            classes = ["card"]
+            if not poster.work:
+                classes.append("unmatched")
+            if not shot:
+                classes.append("noshot")
+            parts.append("<article class='%s'>" % " ".join(classes))
+            if shot:
+                parts.append("<a class=shot href='%s'><img loading=lazy src='%s' alt='%s'></a>"
+                             % (e(shot), e(shot), e(Path(poster.image).name)))
+            parts.append("<div class=body>")
             parts.append("<h3>%s</h3>" % e(poster.title or "(no title recovered)"))
-            parts.append("<p class=meta>Photo: %s</p>" % e(Path(poster.image).name))
             if poster.work:
                 work = poster.work
                 authors = ", ".join(work["authors"][:6]) + (", et al." if len(work["authors"]) > 6 else "")
                 label = "arXiv:%s" % work["ident"] if work["source"] == "arxiv" else work["ident"]
                 bits = [w for w in (work["published"], work["venue"]) if w]
-                parts.append(
-                    "<p class=meta><a href='%s'>%s</a>%s &middot; %s &middot; match %.2f</p>"
-                    % (e(work["url"]), e(label),
-                       " &middot; " + e(" &middot; ".join(bits)) if bits else "",
-                       e(work["source"]), poster.match_score)
-                )
+                parts.append("<p class=meta><a href='%s'>%s</a>%s</p>"
+                             % (e(work["url"]), e(label),
+                                " &middot; " + e(" &middot; ".join(bits)) if bits else ""))
                 parts.append("<p class=meta>%s</p>" % e(authors or "unknown authors"))
                 if work["categories"]:
                     parts.append("<p class=meta>%s</p>" % e(", ".join(work["categories"])))
                 if work["summary"]:
                     parts.append("<p class=abstract>%s</p>" % e(_clip(work["summary"], 480)))
             else:
-                parts.append("<p class=meta>No confident match (best %.2f)</p>" % poster.match_score)
-            parts.append("<p class=tag>%s &middot; %s &middot; confidence %.2f</p>"
-                         % (e(poster.match_how), e(poster.subfield_source), poster.subfield_confidence))
-            parts.append("</article>")
+                parts.append("<p class=meta>Paper not found</p>")
+            parts.append("<p class=tag>%s</p>" % e(Path(poster.image).name))
+            parts.append("</div></article>")
     parts.append("</main></html>")
     return "\n".join(parts)
 
 
-def write_html(posters: List, path: Path, conference: str = "") -> Path:
-    path.write_text(render_html(posters, conference), encoding="utf-8")
+def write_html(posters: List, path: Path, conference: str = "",
+               images: Optional[dict] = None) -> Path:
+    path.write_text(render_html(posters, conference, images), encoding="utf-8")
     return path
 
 

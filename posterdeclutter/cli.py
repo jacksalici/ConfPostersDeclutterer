@@ -6,7 +6,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from . import __version__, report
+from . import __version__, manual, report, thumbs
 from .llm import LLM, PROVIDERS, DEFAULT_MODEL
 from .log import from_flags
 from .pipeline import REDO_MODES
@@ -42,9 +42,15 @@ def build_parser() -> argparse.ArgumentParser:
                      help="title/arXiv similarity needed to accept a match (default: 0.72)")
     run.add_argument("--organise", choices=("plan", "copy", "move", "symlink"), default="plan",
                      help="lay photos out as <out>/photos/<subfield>/<title>.jpg (default: plan)")
+    run.add_argument("--merge", type=Path, metavar="CSV",
+                     help="a CSV of manual links to apply (see <out>/unmatched.csv). "
+                          "Manual rows win over everything the tool worked out")
+    run.add_argument("--thumbnails", choices=thumbs.MODES, default="files",
+                     help="poster images in the HTML report: files (default, written to "
+                          "<out>/thumbs), embed (single self-contained page), or none")
     run.add_argument("--offline", action="store_true",
                      help="use only cached lookup responses; never touch the network")
-    run.add_argument("--redo", choices=REDO_MODES, default="research",
+    run.add_argument("--redo", choices=REDO_MODES, default="none",
                      help="none: resume where you left off. research: keep the cached OCR "
                           "text and redo titles, lookups and clustering. all: re-OCR too")
     run.add_argument("--refresh-web", action="store_true",
@@ -101,12 +107,27 @@ def cmd_run(args) -> int:
         refresh_web=args.refresh_web,
     )
 
-    for writer, name in ((report.write_json, "report.json"),
-                         (report.write_markdown, "report.md"),
-                         (report.write_html, "report.html")):
-        path = out / name
-        writer(posters, path) if name.endswith(".json") else writer(posters, path, args.conference)
-        log.detail("wrote %s (%d bytes)" % (path, path.stat().st_size), indent=0)
+    merged = 0
+    if args.merge:
+        if not args.merge.exists():
+            print("no such file: %s" % args.merge, file=sys.stderr)
+            return 1
+        rows = manual.read(args.merge)
+        log.head("merging %d manual row(s) from %s" % (len(rows), args.merge))
+        merged = manual.merge(posters, rows, pipeline.fetcher,
+                              classify=pipeline.classify, log=log)
+        if merged:
+            pipeline.persist(posters)
+
+    images = thumbs.prepare(posters, out, mode=args.thumbnails, log=log)
+
+    report.write_json(posters, out / "report.json")
+    report.write_markdown(posters, out / "report.md", args.conference)
+    report.write_html(posters, out / "report.html", args.conference, images)
+    for name in ("report.json", "report.md", "report.html"):
+        log.detail("wrote %s (%d bytes)" % (out / name, (out / name).stat().st_size), indent=0)
+
+    still_missing = manual.write_unmatched(posters, out / "unmatched.csv")
 
     pairs = organise(posters, out / "photos", mode=args.organise)
     if log.verbose:
@@ -118,13 +139,18 @@ def cmd_run(args) -> int:
         )
 
     linked = sum(1 for p in posters if p.work)
-    print("%d posters, %d matched (%s)" % (len(posters), linked, ", ".join(source_names)))
+    print("%d posters, %d matched (%s)%s"
+          % (len(posters), linked, ", ".join(source_names),
+             ", %d from --merge" % merged if merged else ""))
     print("report: %s" % (out / "report.md"))
     print("        %s" % (out / "report.html"))
     if args.organise == "plan":
         print("organise plan (dry run): %s" % (out / "organise-plan.txt"))
     else:
         print("photos %sd into %s" % (args.organise, out / "photos"))
+    if still_missing:
+        print("%d unmatched: add links in %s, then re-run with --merge %s"
+              % (still_missing, out / "unmatched.csv", out / "unmatched.csv"))
     return 0
 
 
