@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
 from . import __version__, manual, report, thumbs
 from .llm import LLM, PROVIDERS, DEFAULT_MODEL
 from .log import from_flags
-from .pipeline import REDO_MODES
+from .pipeline import REDO_MODES, Poster
 from .sources import DEFAULT as DEFAULT_SOURCES, NAMES as SOURCE_NAMES, parse_names
 from .ocr import BACKENDS, OCRError, default_backend, find_images
 from .pipeline import Pipeline, organise
@@ -68,6 +69,21 @@ def build_parser() -> argparse.ArgumentParser:
     ocr.add_argument("--ocr", dest="backend", choices=sorted(BACKENDS), default=None)
     ocr.add_argument("--cache", type=Path, default=Path(".posterdeclutter"))
     ocr.add_argument("-v", "--verbose", action="store_true", help="also show the geometry")
+
+    again = sub.add_parser("report",
+                           help="re-render report.md/html from an earlier report.json")
+    again.add_argument("json", type=Path, nargs="?", default=Path("report"),
+                       help="the report.json, or the folder holding it (default: ./report)")
+    again.add_argument("-o", "--out", type=Path, default=None,
+                       help="output folder (default: next to the json)")
+    again.add_argument("--conference", default="", help="name to put in the report header")
+    again.add_argument("--thumbnails", choices=thumbs.MODES, default="files",
+                       help="poster images in the HTML report: files (default, written to "
+                            "<out>/thumbs), embed (single self-contained page), or none")
+    noise = again.add_mutually_exclusive_group()
+    noise.add_argument("-v", "--verbose", action="store_true",
+                       help="say what is written where")
+    noise.add_argument("-q", "--quiet", action="store_true", help="warnings only")
     return parser
 
 
@@ -154,6 +170,43 @@ def cmd_run(args) -> int:
     return 0
 
 
+def cmd_report(args) -> int:
+    """Rebuild report.md/report.html from a saved report.json. No OCR, no lookups."""
+    log = from_flags(quiet=args.quiet, verbose=args.verbose)
+    src = args.json
+    if src.is_dir():
+        src = src / "report.json"
+    if not src.exists():
+        print("no such file: %s" % src, file=sys.stderr)
+        return 1
+    try:
+        payload = json.loads(src.read_text(encoding="utf-8"))
+        posters = [Poster.from_dict(record)
+                   for group in payload["clusters"].values() for record in group]
+    except (ValueError, KeyError, TypeError, AttributeError):
+        print("not a posterdeclutter report.json: %s" % src, file=sys.stderr)
+        return 1
+    if not posters:
+        print("no poster records in %s" % src, file=sys.stderr)
+        return 1
+
+    out = args.out or src.parent
+    out.mkdir(parents=True, exist_ok=True)
+    log.head("re-rendering %d poster(s) from %s" % (len(posters), src))
+
+    images = thumbs.prepare(posters, out, mode=args.thumbnails, log=log)
+    report.write_markdown(posters, out / "report.md", args.conference)
+    report.write_html(posters, out / "report.html", args.conference, images)
+    for name in ("report.md", "report.html"):
+        log.detail("wrote %s (%d bytes)" % (out / name, (out / name).stat().st_size), indent=0)
+
+    print("%d posters, %d matched" % (len(posters),
+                                      sum(1 for p in posters if p.work)))
+    print("report: %s" % (out / "report.md"))
+    print("        %s" % (out / "report.html"))
+    return 0
+
+
 def cmd_ocr(args) -> int:
     from .ocr import run_ocr
     from .titles import read_page
@@ -185,6 +238,8 @@ def main(argv=None) -> int:
     try:
         if args.command == "run":
             return cmd_run(args)
+        if args.command == "report":
+            return cmd_report(args)
         return cmd_ocr(args)
     except OCRError as exc:
         print("OCR error: %s" % exc, file=sys.stderr)

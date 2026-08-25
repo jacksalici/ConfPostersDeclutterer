@@ -1190,6 +1190,46 @@ class TestCLI(unittest.TestCase):
                 main(base)
             self.assertIn("nothing to do", err.getvalue())
 
+    def test_the_report_command_renders_md_and_html_from_the_json(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            photos, out = self._prepared(Path(tmp))
+            base = ["run", str(photos), "-o", str(out), "--ocr", "sidecar", "--offline",
+                    "--quiet", "--sources", "arxiv,openalex,crossref"]
+            self.assertEqual(main(base), 0)
+            first = (out / "report.md").read_text()
+            payload = json.loads((out / "report.json").read_text())
+            self.assertGreater(payload["stats"]["linked"], 0)
+
+            # Only the derived pages are thrown away; the records survive.
+            (out / "report.md").unlink()
+            (out / "report.html").unlink()
+            self.assertEqual(main(["report", str(out), "--quiet"]), 0)
+            self.assertEqual((out / "report.md").read_text(), first)
+            page = (out / "report.html").read_text()
+            self.assertTrue(page.startswith("<!doctype html>"))
+            self.assertIn("Human-Computer Interaction", page)
+
+    def test_the_report_command_accepts_the_json_path_directly_and_an_out_folder(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            photos, out = self._prepared(Path(tmp))
+            main(["run", str(photos), "-o", str(out), "--ocr", "sidecar",
+                  "--offline", "--quiet"])
+            elsewhere = Path(tmp) / "elsewhere"
+            self.assertEqual(main(["report", str(out / "report.json"),
+                                   "-o", str(elsewhere), "--quiet",
+                                   "--conference", "TestConf"]), 0)
+            markdown = (elsewhere / "report.md").read_text()
+            self.assertIn("# Poster report - TestConf", markdown)
+
+    def test_the_report_command_fails_loudly_on_junk_or_missing_input(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            empty = Path(tmp) / "empty"
+            empty.mkdir()
+            self.assertEqual(main(["report", str(empty), "--quiet"]), 1)
+            junk = Path(tmp) / "junk.json"
+            junk.write_text("{\"clusters\": \"nope\"}", encoding="utf-8")
+            self.assertEqual(main(["report", str(junk), "--quiet"]), 1)
+
     def test_a_missing_merge_file_fails_loudly(self):
         with tempfile.TemporaryDirectory() as tmp:
             photos, out = self._prepared(Path(tmp))

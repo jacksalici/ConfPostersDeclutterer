@@ -106,6 +106,24 @@ The report tells you what the poster was, not how the tool got there: no match
 scores, no "found via crossref", no confidences. All of that is kept — it is in
 `report.json`, and `--verbose` narrates it live.
 
+## Re-rendering a report
+
+The Markdown and HTML pages are derived data: everything they show lives in
+`report.json`. So you can rebuild them at any time — after a `--merge`, after
+editing records by hand, or just to change `--conference` — without re-running
+the OCR or a single lookup:
+
+```bash
+python3 -m posterdeclutter report ./report/report.json
+# same thing, since a folder is accepted too:
+python3 -m posterdeclutter report ./report --conference "ICML 2026"
+# somewhere else entirely:
+python3 -m posterdeclutter report ./report/report.json -o ./site
+```
+
+Thumbnails are rebuilt as usual (`--thumbnails files|embed|none`); photos that
+have moved on disk are simply left unlinked.
+
 The HTML report shows each poster photo. `--thumbnails files` (the default)
 writes downscaled copies into `thumbs/` and links them, so the page stays small
 and the folder stays portable; `--thumbnails embed` inlines them for a single
