@@ -7,13 +7,26 @@ import json
 import sys
 from pathlib import Path
 
-from . import __version__, manual, report, thumbs
+from . import __version__, images as images_mod, manual, report
 from .llm import LLM, PROVIDERS, DEFAULT_MODEL
 from .log import from_flags
-from .pipeline import REDO_MODES, Poster
+from .pipeline import REDO_MODES, Poster, number
 from .sources import DEFAULT as DEFAULT_SOURCES, NAMES as SOURCE_NAMES, parse_names
 from .ocr import BACKENDS, OCRError, default_backend, find_images
-from .pipeline import Pipeline, organise
+from .pipeline import Pipeline
+
+
+def add_image_options(parser) -> None:
+    """How hard to squeeze the poster photos. The defaults are deliberately
+    gentle; both are here for the two ends of the page-weight argument."""
+    parser.add_argument("--image-width", type=int, default=images_mod.DEFAULT_WIDTH,
+                        metavar="PX",
+                        help="widest a poster image may be, in pixels (default: %d; "
+                             "0 keeps the original size)" % images_mod.DEFAULT_WIDTH)
+    parser.add_argument("--image-quality", type=int, default=images_mod.DEFAULT_QUALITY,
+                        metavar="1-100",
+                        help="JPEG quality for the poster images (default: %d)"
+                             % images_mod.DEFAULT_QUALITY)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -41,16 +54,14 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--conference", default="", help="name to put in the report header")
     run.add_argument("--threshold", type=float, default=0.72,
                      help="title/arXiv similarity needed to accept a match (default: 0.72)")
-    run.add_argument("--organise", choices=("plan", "copy", "move", "symlink"), default="plan",
-                     help="lay photos out as <out>/photos/<subfield>/<title>.jpg (default: plan)")
     run.add_argument("--merge", type=Path, metavar="CSV",
                      help="a CSV of manual links to apply (see <out>/unmatched.csv). "
                           "Manual rows win over everything the tool worked out")
-    run.add_argument("--thumbnails", choices=thumbs.MODES, default="files",
-                     help="poster images in the HTML report: files (default, written to "
-                          "<out>/thumbs), embed (single self-contained page), or none. "
-                          "Unless none, the full photos are compressed into <out>/posters, "
-                          "named after the poster, and that is what a click opens")
+    run.add_argument("--images", choices=images_mod.MODES, default="files",
+                     help="poster images in the HTML report: files (default, compressed "
+                          "into <out>/posters as poster01.jpg and linked), embed (inlined, "
+                          "for a single self-contained page), or none")
+    add_image_options(run)
     run.add_argument("--offline", action="store_true",
                      help="use only cached lookup responses; never touch the network")
     run.add_argument("--redo", choices=REDO_MODES, default="none",
@@ -79,11 +90,11 @@ def build_parser() -> argparse.ArgumentParser:
     again.add_argument("-o", "--out", type=Path, default=None,
                        help="output folder (default: next to the json)")
     again.add_argument("--conference", default="", help="name to put in the report header")
-    again.add_argument("--thumbnails", choices=thumbs.MODES, default="files",
-                       help="poster images in the HTML report: files (default, written to "
-                            "<out>/thumbs), embed (single self-contained page), or none. "
-                            "Unless none, the full photos are compressed into <out>/posters, "
-                            "named after the poster, and that is what a click opens")
+    again.add_argument("--images", choices=images_mod.MODES, default="files",
+                       help="poster images in the HTML report: files (default, compressed "
+                            "into <out>/posters as poster01.jpg and linked), embed (inlined, "
+                            "for a single self-contained page), or none")
+    add_image_options(again)
     noise = again.add_mutually_exclusive_group()
     noise.add_argument("-v", "--verbose", action="store_true",
                        help="say what is written where")
@@ -139,25 +150,17 @@ def cmd_run(args) -> int:
         if merged:
             pipeline.persist(posters)
 
-    images = thumbs.prepare(posters, out, mode=args.thumbnails, log=log)
-    full = thumbs.photos(posters, out, mode=args.thumbnails, log=log)
+    number(posters)
+    shots = images_mod.prepare(posters, out, mode=args.images, width=args.image_width,
+                               quality=args.image_quality, log=log)
 
-    report.write_json(posters, out / "report.json")
-    report.write_markdown(posters, out / "report.md", args.conference)
-    report.write_html(posters, out / "report.html", args.conference, images, full)
+    report.write_json(posters, out / "report.json", shots)
+    report.write_markdown(posters, out / "report.md", args.conference, shots)
+    report.write_html(posters, out / "report.html", args.conference, shots)
     for name in ("report.json", "report.md", "report.html"):
         log.detail("wrote %s (%d bytes)" % (out / name, (out / name).stat().st_size), indent=0)
 
     still_missing = manual.write_unmatched(posters, out / "unmatched.csv")
-
-    pairs = organise(posters, out / "photos", mode=args.organise)
-    if log.verbose:
-        for source, target in pairs:
-            log.detail("%s -> %s" % (Path(source).name, target), indent=0)
-    if args.organise == "plan":
-        (out / "organise-plan.txt").write_text(
-            "\n".join("%s -> %s" % (s, t) for s, t in pairs) + "\n", encoding="utf-8"
-        )
 
     linked = sum(1 for p in posters if p.work)
     print("%d posters, %d matched (%s)%s"
@@ -165,10 +168,6 @@ def cmd_run(args) -> int:
              ", %d from --merge" % merged if merged else ""))
     print("report: %s" % (out / "report.md"))
     print("        %s" % (out / "report.html"))
-    if args.organise == "plan":
-        print("organise plan (dry run): %s" % (out / "organise-plan.txt"))
-    else:
-        print("photos %sd into %s" % (args.organise, out / "photos"))
     if still_missing:
         print("%d unmatched: add links in %s, then re-run with --merge %s"
               % (still_missing, out / "unmatched.csv", out / "unmatched.csv"))
@@ -195,14 +194,21 @@ def cmd_report(args) -> int:
         print("no poster records in %s" % src, file=sys.stderr)
         return 1
 
+    # The paths in report.json are relative to it, which is the point of them:
+    # the folder can be moved, or sent to someone, and still render.
+    for poster in posters:
+        if not Path(poster.image).is_absolute():
+            poster.image = str(src.parent / poster.image)
+    number(posters)
+
     out = args.out or src.parent
     out.mkdir(parents=True, exist_ok=True)
     log.head("re-rendering %d poster(s) from %s" % (len(posters), src))
 
-    images = thumbs.prepare(posters, out, mode=args.thumbnails, log=log)
-    full = thumbs.photos(posters, out, mode=args.thumbnails, log=log)
-    report.write_markdown(posters, out / "report.md", args.conference)
-    report.write_html(posters, out / "report.html", args.conference, images, full)
+    shots = images_mod.prepare(posters, out, mode=args.images, width=args.image_width,
+                               quality=args.image_quality, log=log)
+    report.write_markdown(posters, out / "report.md", args.conference, shots)
+    report.write_html(posters, out / "report.html", args.conference, shots)
     for name in ("report.md", "report.html"):
         log.detail("wrote %s (%d bytes)" % (out / name, (out / name).stat().st_size), indent=0)
 

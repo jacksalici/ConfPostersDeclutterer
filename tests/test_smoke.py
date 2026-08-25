@@ -8,18 +8,19 @@ Run with:  python3 -m unittest discover -s tests -t . -v
 from __future__ import annotations
 
 import json
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
 
 from tests.helpers import FIXTURES, copy_photos, seed, seed_all
 
-from posterdeclutter import (arxiv, crossref, llm, manual, ocr, openalex, report,
-                             sources, subfields, thumbs, titles, util, webpage)
+from posterdeclutter import (arxiv, crossref, images as images_mod, llm, manual, ocr,
+                             openalex, report, sources, subfields, titles, util, webpage)
 from posterdeclutter.cli import main
 from posterdeclutter.http import Fetcher
 from posterdeclutter.log import QUIET, VERBOSE, Log, from_flags, human_time
-from posterdeclutter.pipeline import Pipeline, organise
+from posterdeclutter.pipeline import Pipeline, number
 
 
 def fetcher(cache: Path) -> Fetcher:
@@ -716,20 +717,6 @@ class TestPipelineEndToEnd(unittest.TestCase):
         self.assertEqual(posters["IMG_0003.jpg"].title,
                          "Galaxy Cluster Mass Calibration with Weak Lensing")
 
-    def test_organise_plan_is_a_dry_run(self):
-        posters = self._run()
-        pairs = organise(posters, self.out / "photos", mode="plan")
-        self.assertEqual(len(pairs), 5)
-        self.assertFalse((self.out / "photos").exists())
-        target = dict(pairs)[self.photos / "IMG_0001.jpg"]
-        self.assertEqual(target.parent.name, "high-energy-physics-experiment")
-        self.assertTrue(target.name.startswith("deep-sets-for-jet-flavour-tagging"))
-
-    def test_organise_copy_writes_files_and_keeps_originals(self):
-        for source, target in organise(self._run(), self.out / "photos", mode="copy"):
-            self.assertTrue(target.exists(), target)
-            self.assertTrue(source.exists(), source)
-
 
 class TestBatchedAssistInThePipeline(unittest.TestCase):
     """The model is consulted once per run, after every deterministic pass."""
@@ -965,7 +952,7 @@ class TestManualRoundTrip(unittest.TestCase):
     @staticmethod
     def _section(markdown, image_name):
         """One poster's markdown entry: from its Photo line to the next heading."""
-        start = markdown.index("Photo: `%s`" % image_name)
+        start = markdown.index(image_name)          # only the Photo line names it
         end = markdown.find("### ", start)
         return markdown[start:] if end == -1 else markdown[start:end]
 
@@ -1015,83 +1002,92 @@ class TestPosterImagesInTheReport(unittest.TestCase):
     def tearDown(self):
         self._tmp.cleanup()
 
-    def _fake(self, name="IMG_0001.jpg"):
-        from posterdeclutter.pipeline import Poster
-        return [Poster(image=str(self.photos / name), title="A Poster")]
+    def _fake(self, *names):
+        from posterdeclutter.pipeline import Poster, number
+        return number([Poster(image=str(self.photos / name), title="A Poster")
+                       for name in (names or ("IMG_0001.jpg",))])
 
-    @unittest.skipUnless(thumbs.available(), "needs sips (macOS)")
-    def test_files_mode_writes_thumbnails_and_links_them_relatively(self):
+    @unittest.skipUnless(images_mod.available(), "needs sips (macOS)")
+    def test_files_mode_compresses_the_photos_and_links_them_relatively(self):
         posters = self._fake()
-        images = thumbs.prepare(posters, self.out, mode="files")
-        src = images[posters[0].image]
-        self.assertTrue(src.startswith("thumbs/"), src)
-        thumb = self.out / src
-        self.assertTrue(thumb.exists())
-        # A thumbnail must never be larger than the photo it stands in for.
-        self.assertLessEqual(thumb.stat().st_size, Path(posters[0].image).stat().st_size * 2)
-
-        hrefs = thumbs.photos(posters, self.out, mode="files")
-        full = hrefs[posters[0].image]
-        page = report.render_html(posters, images=images, originals=hrefs)
-        self.assertNotEqual(full, src)
-        # The thumbnail is displayed, but a click opens the full photo.
-        self.assertIn("<a class=shot href='%s'><img loading=lazy src='%s'" % (full, src), page)
-        self.assertIn("class=shot", page)
-        # Without an originals map the click falls back to the thumbnail itself.
-        self.assertIn("href='%s'" % src, report.render_html(posters, images=images))
-
-    @unittest.skipUnless(thumbs.available(), "needs sips (macOS)")
-    def test_the_click_opens_a_compressed_copy_named_after_the_poster(self):
-        posters = self._fake()
-        href = thumbs.photos(posters, self.out, mode="files")[posters[0].image]
+        shots = images_mod.prepare(posters, self.out, mode="files")
+        src = shots[posters[0].image]
         # Named after the poster, not after the phone, and inside the report folder.
-        self.assertEqual(href, "posters/a-poster.jpg")
-        copy = self.out / href
+        self.assertEqual(src, "posters/poster01.jpg")
+        copy = self.out / src
         self.assertTrue(copy.exists())
-        # Compressed, but gently: still the whole photo, never upscaled.
+        self.assertFalse((self.out / "thumbs").exists())
+
+        page = report.render_html(posters, images=shots)
+        # The image on the card is the poster image; a click opens the same file.
+        self.assertIn("<a class=shot href='%s'><img loading=lazy src='%s'" % (src, src), page)
+
+    @unittest.skipUnless(images_mod.available(), "needs sips (macOS)")
+    def test_the_photo_is_compressed_but_never_upscaled(self):
+        posters = self._fake()
         original = Path(posters[0].image)
-        self.assertEqual(thumbs.pixel_width(copy),
-                         min(thumbs.pixel_width(original), thumbs.PHOTO_WIDTH))
+        shots = images_mod.prepare(posters, self.out, mode="files")
+        copy = self.out / shots[posters[0].image]
+        self.assertEqual(images_mod.pixel_width(copy),
+                         min(images_mod.pixel_width(original), images_mod.DEFAULT_WIDTH))
 
-    @unittest.skipUnless(thumbs.available(), "needs sips (macOS)")
-    def test_two_posters_sharing_a_title_do_not_share_a_file(self):
-        posters = self._fake() + self._fake("IMG_0002.jpg")
-        hrefs = thumbs.photos(posters, self.out, mode="files")
-        self.assertEqual(sorted(hrefs.values()),
-                         ["posters/a-poster-2.jpg", "posters/a-poster.jpg"])
+    @unittest.skipUnless(images_mod.available(), "needs sips (macOS)")
+    def test_the_width_and_quality_are_configurable(self):
+        posters = self._fake()
+        narrow = images_mod.prepare(posters, self.out / "narrow", mode="files",
+                                    width=16, quality=40)
+        wide = images_mod.prepare(posters, self.out / "wide", mode="files", width=0)
+        self.assertEqual(images_mod.pixel_width(self.out / "narrow"
+                                                / narrow[posters[0].image]), 16)
+        # width 0 keeps the photo the size it was.
+        self.assertEqual(images_mod.pixel_width(self.out / "wide" / wide[posters[0].image]),
+                         images_mod.pixel_width(Path(posters[0].image)))
 
-    def test_no_photos_are_written_when_the_report_shows_none(self):
-        self.assertEqual(thumbs.photos(self._fake(), self.out, mode="none"), {})
-        self.assertFalse((self.out / "posters").exists())
+    @unittest.skipUnless(images_mod.available(), "needs sips (macOS)")
+    def test_every_poster_gets_its_own_file(self):
+        posters = self._fake("IMG_0001.jpg", "IMG_0002.jpg")
+        shots = images_mod.prepare(posters, self.out, mode="files")
+        self.assertEqual(sorted(shots.values()),
+                         ["posters/poster01.jpg", "posters/poster02.jpg"])
 
-    def test_a_missing_photo_has_nothing_to_link_to(self):
-        from posterdeclutter.pipeline import Poster
-        posters = [Poster(image=str(self.photos / "gone.jpg"), title="Vanished")]
-        self.assertEqual(thumbs.photos(posters, self.out, mode="files"), {})
+    @unittest.skipUnless(images_mod.available(), "needs sips (macOS)")
+    def test_re_rendering_in_place_does_not_recompress_its_own_output(self):
+        posters = self._fake()
+        first = images_mod.prepare(posters, self.out, mode="files")
+        copy = self.out / first[posters[0].image]
+        stamp = copy.stat().st_mtime_ns
+        # A re-render reads back what it wrote: same file in, same file out.
+        posters[0].image = str(copy)
+        again = images_mod.prepare(posters, self.out, mode="files")
+        self.assertEqual(again[posters[0].image], "posters/poster01.jpg")
+        self.assertEqual(copy.stat().st_mtime_ns, stamp)
 
-    @unittest.skipUnless(thumbs.available(), "needs sips (macOS)")
+    @unittest.skipUnless(images_mod.available(), "needs sips (macOS)")
     def test_embed_mode_produces_a_single_self_contained_page(self):
         posters = self._fake()
-        images = thumbs.prepare(posters, self.out, mode="embed")
-        self.assertTrue(images[posters[0].image].startswith("data:image/"))
-        page = report.render_html(posters, images=images)
+        shots = images_mod.prepare(posters, self.out, mode="embed")
+        self.assertTrue(shots[posters[0].image].startswith("data:image/"))
+        page = report.render_html(posters, images=shots)
         self.assertIn("src='data:image/", page)
+        # Single file means single file: nothing is left beside it.
+        self.assertEqual(list(self.out.iterdir()), [])
 
     def test_none_mode_leaves_the_page_without_images(self):
         posters = self._fake()
-        self.assertEqual(thumbs.prepare(posters, self.out, mode="none"), {})
+        self.assertEqual(images_mod.prepare(posters, self.out, mode="none"), {})
+        self.assertFalse((self.out / "posters").exists())
         page = report.render_html(posters, images={})
         self.assertNotIn("<img", page)
         self.assertIn("noshot", page)
 
     def test_an_unknown_mode_is_rejected(self):
         with self.assertRaises(ValueError):
-            thumbs.prepare(self._fake(), self.out, mode="gigantic")
+            images_mod.prepare(self._fake(), self.out, mode="gigantic")
 
     def test_a_missing_photo_is_skipped_not_crashed_on(self):
         from posterdeclutter.pipeline import Poster
         posters = [Poster(image=str(self.photos / "gone.jpg"), title="Vanished")]
-        self.assertEqual(thumbs.prepare(posters, self.out, mode="files"), {})
+        self.assertEqual(images_mod.prepare(posters, self.out, mode="files"), {})
 
 
 class TestCLI(unittest.TestCase):
@@ -1108,7 +1104,7 @@ class TestCLI(unittest.TestCase):
                          "--offline", "--quiet", "--conference", "TestConf",
                          "--sources", "arxiv,openalex,crossref"])
             self.assertEqual(code, 0)
-            for name in ("report.json", "report.md", "report.html", "organise-plan.txt"):
+            for name in ("report.json", "report.md", "report.html"):
                 self.assertTrue((out / name).exists(), name)
             self.assertFalse((out / "photos").exists())  # plan mode must not write
 
@@ -1190,8 +1186,9 @@ class TestCLI(unittest.TestCase):
 
             self.assertEqual(main(base + ["--merge", str(csv_path)]), 0)
             payload = json.loads((out / "report.json").read_text())
+            # IMG_0005.jpg is the fifth photo, so poster05 in the report.
             merged = [p for group in payload["clusters"].values() for p in group
-                      if Path(p["image"]).name == "IMG_0005.jpg"][0]
+                      if p["pid"] == "poster05"][0]
             self.assertEqual(merged["match_source"], "manual")
             self.assertEqual(merged["work"]["ident"], "2401.12345v1")
             # The export now lists only what is still missing.
@@ -1211,7 +1208,7 @@ class TestCLI(unittest.TestCase):
             main(base)   # plain resume, no --merge this time
             payload = json.loads((out / "report.json").read_text())
             kept = [p for group in payload["clusters"].values() for p in group
-                    if Path(p["image"]).name == "IMG_0003.jpg"][0]
+                    if p["pid"] == "poster03"][0]
             self.assertEqual(kept["title"], "Galaxy Clusters")
             self.assertEqual(kept["subfield"], "Astrophysics")
 
@@ -1274,22 +1271,44 @@ class TestCLI(unittest.TestCase):
                                    "--offline", "--quiet", "--merge",
                                    str(Path(tmp) / "nope.csv")]), 1)
 
-    def test_thumbnails_land_next_to_the_report(self):
+    def test_poster_images_land_next_to_the_report_renamed(self):
         with tempfile.TemporaryDirectory() as tmp:
             photos, out = self._prepared(Path(tmp))
             main(["run", str(photos), "-o", str(out), "--ocr", "sidecar", "--offline",
-                  "--quiet", "--thumbnails", "files"])
+                  "--quiet", "--images", "files"])
             page = (out / "report.html").read_text()
-            if thumbs.available():
-                self.assertTrue((out / "thumbs").is_dir())
-                self.assertIn("<img loading=lazy src='thumbs/", page)
-                # ...and so do the full photos a click opens, renamed as they land.
+            if images_mod.available():
                 self.assertTrue((out / "posters").is_dir())
-                self.assertIn("<a class=shot href='posters/", page)
-                names = [p.name for p in (out / "posters").iterdir()]
-                self.assertIn("deep-sets-for-jet-flavour-tagging-at-the-lhc.jpg", names)
-                # A poster with no title recovered keeps the photo's own name.
-                self.assertIn("img-0003.jpg", names)
+                self.assertFalse((out / "thumbs").exists())
+                self.assertIn("<img loading=lazy src='posters/poster01.jpg'", page)
+                self.assertEqual(sorted(p.name for p in (out / "posters").iterdir()),
+                                 ["poster0%d.jpg" % n for n in range(1, 6)])
+                # ...and the report records the same relative paths, not this
+                # machine's photo folder.
+                payload = json.loads((out / "report.json").read_text())
+                records = [r for group in payload["clusters"].values() for r in group]
+                self.assertEqual(sorted(r["image"] for r in records),
+                                 ["posters/poster0%d.jpg" % n for n in range(1, 6)])
+                self.assertNotIn(str(photos), (out / "report.json").read_text())
+                self.assertIn("- Photo: [posters/poster01.jpg](posters/poster01.jpg)",
+                              (out / "report.md").read_text())
+
+    def test_a_report_folder_can_be_moved_and_still_re_render(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            photos, out = self._prepared(Path(tmp))
+            main(["run", str(photos), "-o", str(out), "--ocr", "sidecar",
+                  "--offline", "--quiet"])
+            if not images_mod.available():
+                return
+            # The photos the run read from are gone; the report folder is not.
+            shutil.rmtree(photos)
+            moved = Path(tmp) / "sent-elsewhere"
+            shutil.move(str(out), str(moved))
+            self.assertEqual(main(["report", str(moved), "--quiet"]), 0)
+            page = (moved / "report.html").read_text()
+            self.assertIn("<img loading=lazy src='posters/poster01.jpg'", page)
+            self.assertEqual(sorted(p.name for p in (moved / "posters").iterdir()),
+                             ["poster0%d.jpg" % n for n in range(1, 6)])
 
     def test_run_on_an_empty_folder_fails_loudly(self):
         with tempfile.TemporaryDirectory() as tmp:

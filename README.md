@@ -2,8 +2,7 @@
 
 Point it at a folder of poster photographs from a conference. It reads the title
 off each photo, finds the paper in a scholarly index, and writes a report grouped
-by subfield — plus, optionally, files the photos into folders named after the
-papers.
+by subfield — alongside a tidy copy of every photo, renamed and compressed.
 
 No dependencies: stdlib Python 3.9+, macOS Vision for OCR. The LLM is optional
 and off by default.
@@ -88,16 +87,13 @@ by path, size and mtime.
 
 ```
 report/
-├── report.html          poster thumbnails, clustered by subfield, light+dark
+├── report.html          the posters, clustered by subfield, light+dark
 ├── report.md            same content as Markdown
 ├── report.json          every field, including all the provenance
 ├── unmatched.csv        the posters with no paper — fill in links, then --merge
-├── thumbs/              the images the HTML report shows
-├── posters/             the full photos, compressed and named after the poster;
-│   └── superconducting-qubit-readout.jpg      this is what a click opens
-├── organise-plan.txt    what --organise would do (dry run is the default)
-├── photos/              only with --organise copy|move|symlink
-│   └── quantum-physics/superconducting-qubit-readout.jpg
+├── posters/             the photos the report shows: compressed, renamed
+│   ├── poster01.jpg
+│   └── poster02.jpg
 └── cache/
     ├── lines/           recognised text + geometry, per image
     ├── web/             every HTTP response, by URL
@@ -107,6 +103,32 @@ report/
 The report tells you what the poster was, not how the tool got there: no match
 scores, no "found via crossref", no confidences. All of that is kept — it is in
 `report.json`, and `--verbose` narrates it live.
+
+### The poster images
+
+Every poster gets a number — `poster01`, `poster02` — and that is what its file
+in `posters/` is called. The report shows those images directly: there are no
+thumbnails to keep in step, and no `IMG_4417.jpg` anywhere in the folder.
+
+They are compressed on the way in, gently: 1800px wide at quality 85 by default,
+which takes a 4 MB phone photo to something under a megabyte while leaving the
+small print readable. Both ends are yours to set:
+
+```bash
+# lighter page, for a lot of posters
+python3 -m posterdeclutter run ./photos -o ./report --image-width 1000 --image-quality 75
+# barely touched: original size, near-lossless
+python3 -m posterdeclutter run ./photos -o ./report --image-width 0 --image-quality 100
+```
+
+`--images files` (the default) writes them into `posters/` and links them
+relatively, so the folder can be moved or sent on and still render; `--images
+embed` inlines them and leaves nothing beside the page; `--images none` leaves
+them out. The paths in `report.json`, `report.md` and `report.html` are all the
+same relative ones — nothing points into your Photos folder.
+
+Images are made with `sips`, which ships with macOS; without it the report links
+the original photos where they lie.
 
 ## Re-rendering a report
 
@@ -123,24 +145,15 @@ python3 -m posterdeclutter report ./report --conference "ICML 2026"
 python3 -m posterdeclutter report ./report/report.json -o ./site
 ```
 
-Thumbnails and the `posters/` copies are rebuilt as usual (`--thumbnails
-files|embed|none`) — including into a fresh `-o` folder, which is how you get a
-self-contained report to publish. Photos that have moved on disk are simply left
-unlinked.
+Because `report.json` points at `posters/poster01.jpg` and not at your camera
+roll, a re-render works from the report folder alone — after it has been moved,
+copied to another machine, or emailed to a co-author, and even if the original
+photos are long gone. `--images` and the compression flags apply as usual, so
+this is also how you produce a lighter or a fully embedded copy to publish:
 
-The HTML report shows each poster photo. `--thumbnails files` (the default)
-writes downscaled copies into `thumbs/` and links them, so the page stays small
-and the folder stays portable; `--thumbnails embed` inlines them for a single
-self-contained file; `--thumbnails none` leaves them out.
-
-Clicking a thumbnail opens the whole photo — not the camera original but a copy
-in `posters/`, recompressed gently (2400px wide, quality 90: a 4 MB phone photo
-lands around 1 MB, still crisp enough to read the small print) and renamed after
-the poster rather than after whatever the phone called it. So the report folder
-is the thing you hand to someone else, and `IMG_4417.jpg` never appears in it.
-
-Both are made with `sips`, which ships with macOS; without it the report links
-the originals where they lie, as before.
+```bash
+python3 -m posterdeclutter report ./report -o ./site --images embed --image-width 1200
+```
 
 ## Filling the gaps by hand
 
@@ -180,9 +193,9 @@ only what is *still* missing, so the file shrinks as you work through it.
 
 | Flag | |
 |---|---|
-| `--organise plan\|copy\|move\|symlink` | file the photos by subfield and title. `plan` (default) only writes the plan |
 | `--merge <csv>` | apply manual links (see above) |
-| `--thumbnails files\|embed\|none` | poster images in the HTML report (`none` also skips `posters/`) |
+| `--images files\|embed\|none` | poster images in the HTML report |
+| `--image-width 1800`, `--image-quality 85` | how hard to squeeze them (`--image-width 0` keeps the original size) |
 | `--conference "NeurIPS 2026"` | title for the report header |
 | `--threshold 0.72` | how sure a title match must be |
 | `--llm off\|api\|claude-cli\|codex-cli` | see below |

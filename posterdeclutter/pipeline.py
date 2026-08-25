@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import shutil
 import time
 from collections import Counter
 from dataclasses import dataclass, field, asdict
@@ -26,7 +25,6 @@ from . import titles as titles_mod
 from .http import Fetcher
 from .llm import LLM, Ask, LLMError
 from .log import Log, human_time
-from .util import slugify
 
 REDO_MODES = ("none", "research", "all")
 
@@ -373,7 +371,7 @@ class Pipeline:
 
 def number(posters: List[Poster]) -> List[Poster]:
     """Give every poster a stable name - poster01, poster02, ... - which is what
-    its files are called wherever they land: thumbs/, posters/, photos/.
+    the compressed copy in posters/ is called.
 
     A poster that already carries one keeps it, so re-rendering an old report
     renames nothing and the paths in report.json stay good.
@@ -390,37 +388,3 @@ def number(posters: List[Poster]) -> List[Poster]:
         poster.pid = "poster%0*d" % (width, counter)
         taken.add(poster.pid)
     return posters
-
-
-def organise(posters: List[Poster], destination: Path, mode: str = "copy") -> List[tuple]:
-    """Lay the photos out as <destination>/<subfield>/poster<id>.<ext>.
-
-    Returns the (source, target) pairs; with mode="plan" nothing is written.
-    """
-    if mode not in ("plan", "copy", "move", "symlink"):
-        raise ValueError("unknown organise mode %r" % mode)
-    pairs = []
-    used = set()
-    for poster in posters:
-        source = Path(poster.image)
-        folder = destination / slugify(poster.subfield)
-        stem = poster.pid or slugify(poster.title or source.stem)
-        target = folder / (stem + source.suffix.lower())
-        counter = 2
-        while target in used or (mode != "plan" and target.exists() and target != source):
-            target = folder / ("%s-%d%s" % (stem, counter, source.suffix.lower()))
-            counter += 1
-        used.add(target)
-        pairs.append((source, target))
-        if mode == "plan":
-            continue
-        folder.mkdir(parents=True, exist_ok=True)
-        if mode == "copy":
-            shutil.copy2(source, target)
-        elif mode == "move":
-            shutil.move(str(source), str(target))
-        else:
-            if target.is_symlink():
-                target.unlink()
-            target.symlink_to(source.resolve())
-    return pairs

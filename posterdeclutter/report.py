@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import html
 import json
+import os
 from collections import OrderedDict
 from datetime import date
 from pathlib import Path
@@ -32,21 +33,55 @@ def _stats(posters: List) -> dict:
     }
 
 
-def write_json(posters: List, path: Path) -> Path:
+def _href(poster, images: dict, base: Optional[Path] = None) -> str:
+    """Where the report should point for this poster's photo: the compressed
+    copy in posters/ if there is one, else the photo itself, relative to `base`
+    - the folder the report is written to."""
+    href = images.get(poster.image, "")
+    if href and not href.startswith("data:"):   # an embedded page has no file to point at
+        return href
+    if base is None:
+        return poster.image
+    try:
+        return os.path.relpath(poster.image, base)
+    except ValueError:                   # different drive; nothing relative to say
+        return poster.image
+
+
+def write_json(posters: List, path: Path, images: Optional[dict] = None) -> Path:
+    """The records, with `image` rewritten to the path the report links.
+
+    Absolute paths into someone's Photos folder are of no use to a reader and
+    do not survive the folder being moved or sent on; a relative one does, and
+    is exactly what report.html and report.md show.
+    """
+    images = images or {}
+
+    def record(poster) -> dict:
+        out = poster.to_dict()
+        out["image"] = _href(poster, images, path.parent)
+        return out
+
     payload = {
         "generated": date.today().isoformat(),
         "stats": _stats(posters),
         "clusters": {
-            name: [p.to_dict() for p in group] for name, group in cluster(posters).items()
+            name: [record(p) for p in group] for name, group in cluster(posters).items()
         },
     }
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     return path
 
 
-def render_markdown(posters: List, conference: str = "") -> str:
+def render_markdown(posters: List, conference: str = "", images: Optional[dict] = None,
+                    base: Optional[Path] = None) -> str:
     """The reader wants the paper, not the machinery that found it: scores,
-    match methods and confidences stay in report.json and in --verbose."""
+    match methods and confidences stay in report.json and in --verbose.
+
+    `images` maps a poster's image path to the photo the report links, the same
+    map report.json and report.html are built from. See images.prepare.
+    """
+    images = images or {}
     stats = _stats(posters)
     out = ["# Poster report%s" % (" - " + conference if conference else ""), ""]
     out.append("%d posters - %d titles recovered, %d linked to a paper."
@@ -64,7 +99,8 @@ def render_markdown(posters: List, conference: str = "") -> str:
         for poster in group:
             out.append("### %s" % (poster.title or "*(no title recovered)*"))
             out.append("")
-            out.append("- Photo: `%s`" % Path(poster.image).name)
+            out.append("- Photo: [%s](%s)" % (_href(poster, images, base),
+                                              _href(poster, images, base)))
             if poster.work:
                 work = poster.work
                 authors = ", ".join(work["authors"][:6])
@@ -94,8 +130,10 @@ def render_markdown(posters: List, conference: str = "") -> str:
     return "\n".join(out).rstrip() + "\n"
 
 
-def write_markdown(posters: List, path: Path, conference: str = "") -> Path:
-    path.write_text(render_markdown(posters, conference), encoding="utf-8")
+def write_markdown(posters: List, path: Path, conference: str = "",
+                   images: Optional[dict] = None) -> Path:
+    path.write_text(render_markdown(posters, conference, images, path.parent),
+                    encoding="utf-8")
     return path
 
 
@@ -147,17 +185,14 @@ _FOOTER = (
 )
 
 
-def render_html(posters: List, conference: str = "", images: Optional[dict] = None,
-                originals: Optional[dict] = None) -> str:
+def render_html(posters: List, conference: str = "", images: Optional[dict] = None) -> str:
     """Same restraint as the Markdown: the paper, not the machinery.
 
     `images` maps a poster's image path to whatever the page should load - a
-    relative path to a thumbnail, or a data URI. See thumbs.prepare. `originals`
-    maps it to the full photo, which is what a click on the image opens - see
-    thumbs.photos.
+    relative path to the compressed photo, or a data URI. See images.prepare.
+    The card shows it small; a click opens the same file full size.
     """
     images = images or {}
-    originals = originals or {}
     stats = _stats(posters)
     groups = cluster(posters)
     e = html.escape
@@ -187,8 +222,8 @@ def render_html(posters: List, conference: str = "", images: Optional[dict] = No
             parts.append("<article class='%s'>" % " ".join(classes))
             if shot:
                 parts.append("<a class=shot href='%s'><img loading=lazy src='%s' alt='%s'></a>"
-                             % (e(originals.get(poster.image, shot)),
-                                e(shot), e(Path(poster.image).name)))
+                             % (e(shot), e(shot),
+                                e(poster.title or poster.pid or Path(poster.image).name)))
             parts.append("<div class=body>")
             parts.append("<h3>%s</h3>" % e(poster.title or "(no title recovered)"))
             if poster.work:
@@ -206,7 +241,7 @@ def render_html(posters: List, conference: str = "", images: Optional[dict] = No
                     parts.append("<p class=abstract>%s</p>" % e(_clip(work["summary"], 480)))
             else:
                 parts.append("<p class=meta>Paper not found</p>")
-            parts.append("<p class=tag>%s</p>" % e(Path(poster.image).name))
+            parts.append("<p class=tag>%s</p>" % e(poster.pid or Path(poster.image).name))
             parts.append("</div></article>")
     parts.append(_FOOTER)
     parts.append("</main></html>")
@@ -214,9 +249,8 @@ def render_html(posters: List, conference: str = "", images: Optional[dict] = No
 
 
 def write_html(posters: List, path: Path, conference: str = "",
-               images: Optional[dict] = None, originals: Optional[dict] = None) -> Path:
-    path.write_text(render_html(posters, conference, images, originals),
-                    encoding="utf-8")
+               images: Optional[dict] = None) -> Path:
+    path.write_text(render_html(posters, conference, images), encoding="utf-8")
     return path
 
 
