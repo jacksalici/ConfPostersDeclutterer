@@ -34,6 +34,7 @@ REDO_MODES = ("none", "research", "all")
 @dataclass
 class Poster:
     image: str
+    pid: str = ""                       # poster01, poster02 - see number()
     title: Optional[str] = None
     title_source: str = "none"          # heuristic | llm | matched-paper | none
     title_score: float = 0.0
@@ -370,8 +371,29 @@ class Pipeline:
                     self.log.detail(note, indent=3)
 
 
+def number(posters: List[Poster]) -> List[Poster]:
+    """Give every poster a stable name - poster01, poster02, ... - which is what
+    its files are called wherever they land: thumbs/, posters/, photos/.
+
+    A poster that already carries one keeps it, so re-rendering an old report
+    renames nothing and the paths in report.json stay good.
+    """
+    width = max(2, len(str(len(posters))))
+    taken = {p.pid for p in posters if p.pid}
+    counter = 0
+    for poster in posters:
+        if poster.pid:
+            continue
+        counter += 1
+        while ("poster%0*d" % (width, counter)) in taken:
+            counter += 1
+        poster.pid = "poster%0*d" % (width, counter)
+        taken.add(poster.pid)
+    return posters
+
+
 def organise(posters: List[Poster], destination: Path, mode: str = "copy") -> List[tuple]:
-    """Lay the photos out as <destination>/<subfield>/<title>.<ext>.
+    """Lay the photos out as <destination>/<subfield>/poster<id>.<ext>.
 
     Returns the (source, target) pairs; with mode="plan" nothing is written.
     """
@@ -382,7 +404,7 @@ def organise(posters: List[Poster], destination: Path, mode: str = "copy") -> Li
     for poster in posters:
         source = Path(poster.image)
         folder = destination / slugify(poster.subfield)
-        stem = slugify(poster.title or source.stem)
+        stem = poster.pid or slugify(poster.title or source.stem)
         target = folder / (stem + source.suffix.lower())
         counter = 2
         while target in used or (mode != "plan" and target.exists() and target != source):

@@ -48,7 +48,9 @@ def build_parser() -> argparse.ArgumentParser:
                           "Manual rows win over everything the tool worked out")
     run.add_argument("--thumbnails", choices=thumbs.MODES, default="files",
                      help="poster images in the HTML report: files (default, written to "
-                          "<out>/thumbs), embed (single self-contained page), or none")
+                          "<out>/thumbs), embed (single self-contained page), or none. "
+                          "Unless none, the full photos are compressed into <out>/posters, "
+                          "named after the poster, and that is what a click opens")
     run.add_argument("--offline", action="store_true",
                      help="use only cached lookup responses; never touch the network")
     run.add_argument("--redo", choices=REDO_MODES, default="none",
@@ -79,7 +81,9 @@ def build_parser() -> argparse.ArgumentParser:
     again.add_argument("--conference", default="", help="name to put in the report header")
     again.add_argument("--thumbnails", choices=thumbs.MODES, default="files",
                        help="poster images in the HTML report: files (default, written to "
-                            "<out>/thumbs), embed (single self-contained page), or none")
+                            "<out>/thumbs), embed (single self-contained page), or none. "
+                            "Unless none, the full photos are compressed into <out>/posters, "
+                            "named after the poster, and that is what a click opens")
     noise = again.add_mutually_exclusive_group()
     noise.add_argument("-v", "--verbose", action="store_true",
                        help="say what is written where")
@@ -136,11 +140,11 @@ def cmd_run(args) -> int:
             pipeline.persist(posters)
 
     images = thumbs.prepare(posters, out, mode=args.thumbnails, log=log)
+    full = thumbs.photos(posters, out, mode=args.thumbnails, log=log)
 
     report.write_json(posters, out / "report.json")
     report.write_markdown(posters, out / "report.md", args.conference)
-    report.write_html(posters, out / "report.html", args.conference, images,
-                      thumbs.originals(posters, out))
+    report.write_html(posters, out / "report.html", args.conference, images, full)
     for name in ("report.json", "report.md", "report.html"):
         log.detail("wrote %s (%d bytes)" % (out / name, (out / name).stat().st_size), indent=0)
 
@@ -196,9 +200,9 @@ def cmd_report(args) -> int:
     log.head("re-rendering %d poster(s) from %s" % (len(posters), src))
 
     images = thumbs.prepare(posters, out, mode=args.thumbnails, log=log)
+    full = thumbs.photos(posters, out, mode=args.thumbnails, log=log)
     report.write_markdown(posters, out / "report.md", args.conference)
-    report.write_html(posters, out / "report.html", args.conference, images,
-                      thumbs.originals(posters, out))
+    report.write_html(posters, out / "report.html", args.conference, images, full)
     for name in ("report.md", "report.html"):
         log.detail("wrote %s (%d bytes)" % (out / name, (out / name).stat().st_size), indent=0)
 

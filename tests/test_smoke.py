@@ -637,6 +637,8 @@ class TestPipelineEndToEnd(unittest.TestCase):
         self.assertTrue(page.startswith("<!doctype html>"))
         self.assertIn("Human-Computer Interaction", page)
         self.assertNotIn("<script", page)
+        self.assertIn("github.com/jacksalici/ConfPostersDeclutterer", page)
+        self.assertIn("Report generated automatically", page)
 
     def test_reports_leave_the_machinery_out(self):
         posters = self._run()
@@ -1028,14 +1030,44 @@ class TestPosterImagesInTheReport(unittest.TestCase):
         # A thumbnail must never be larger than the photo it stands in for.
         self.assertLessEqual(thumb.stat().st_size, Path(posters[0].image).stat().st_size * 2)
 
-        page = report.render_html(posters, images=images, originals=thumbs.originals(posters, self.out))
-        full = thumbs.originals(posters, self.out)[posters[0].image]
+        hrefs = thumbs.photos(posters, self.out, mode="files")
+        full = hrefs[posters[0].image]
+        page = report.render_html(posters, images=images, originals=hrefs)
         self.assertNotEqual(full, src)
         # The thumbnail is displayed, but a click opens the full photo.
         self.assertIn("<a class=shot href='%s'><img loading=lazy src='%s'" % (full, src), page)
         self.assertIn("class=shot", page)
         # Without an originals map the click falls back to the thumbnail itself.
         self.assertIn("href='%s'" % src, report.render_html(posters, images=images))
+
+    @unittest.skipUnless(thumbs.available(), "needs sips (macOS)")
+    def test_the_click_opens_a_compressed_copy_named_after_the_poster(self):
+        posters = self._fake()
+        href = thumbs.photos(posters, self.out, mode="files")[posters[0].image]
+        # Named after the poster, not after the phone, and inside the report folder.
+        self.assertEqual(href, "posters/a-poster.jpg")
+        copy = self.out / href
+        self.assertTrue(copy.exists())
+        # Compressed, but gently: still the whole photo, never upscaled.
+        original = Path(posters[0].image)
+        self.assertEqual(thumbs.pixel_width(copy),
+                         min(thumbs.pixel_width(original), thumbs.PHOTO_WIDTH))
+
+    @unittest.skipUnless(thumbs.available(), "needs sips (macOS)")
+    def test_two_posters_sharing_a_title_do_not_share_a_file(self):
+        posters = self._fake() + self._fake("IMG_0002.jpg")
+        hrefs = thumbs.photos(posters, self.out, mode="files")
+        self.assertEqual(sorted(hrefs.values()),
+                         ["posters/a-poster-2.jpg", "posters/a-poster.jpg"])
+
+    def test_no_photos_are_written_when_the_report_shows_none(self):
+        self.assertEqual(thumbs.photos(self._fake(), self.out, mode="none"), {})
+        self.assertFalse((self.out / "posters").exists())
+
+    def test_a_missing_photo_has_nothing_to_link_to(self):
+        from posterdeclutter.pipeline import Poster
+        posters = [Poster(image=str(self.photos / "gone.jpg"), title="Vanished")]
+        self.assertEqual(thumbs.photos(posters, self.out, mode="files"), {})
 
     @unittest.skipUnless(thumbs.available(), "needs sips (macOS)")
     def test_embed_mode_produces_a_single_self_contained_page(self):
@@ -1251,6 +1283,13 @@ class TestCLI(unittest.TestCase):
             if thumbs.available():
                 self.assertTrue((out / "thumbs").is_dir())
                 self.assertIn("<img loading=lazy src='thumbs/", page)
+                # ...and so do the full photos a click opens, renamed as they land.
+                self.assertTrue((out / "posters").is_dir())
+                self.assertIn("<a class=shot href='posters/", page)
+                names = [p.name for p in (out / "posters").iterdir()]
+                self.assertIn("deep-sets-for-jet-flavour-tagging-at-the-lhc.jpg", names)
+                # A poster with no title recovered keeps the photo's own name.
+                self.assertIn("img-0003.jpg", names)
 
     def test_run_on_an_empty_folder_fails_loudly(self):
         with tempfile.TemporaryDirectory() as tmp:

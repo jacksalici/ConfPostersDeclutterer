@@ -135,7 +135,16 @@ h2 { font-size:1.2rem; margin:2.6rem 0 .9rem; padding-bottom:.35rem;
             border-left:2px solid var(--line); padding-left:.8rem; }
 .tag { font-size:.72rem; text-transform:uppercase; letter-spacing:.06em; color:var(--mut); }
 .unmatched h3 { color:var(--mut); }
+footer { margin-top:3rem; padding-top:1rem; border-top:1px solid var(--line);
+         color:var(--mut); font-size:.82rem; }
+footer a { color:var(--accent); }
 """
+
+_FOOTER = (
+    "<footer>Report generated automatically with the "
+    "<a href='https://github.com/jacksalici/ConfPostersDeclutterer'>conference poster "
+    "declutterer</a> by <a href='https://jacksalici.com'>Jack</a>.</footer>"
+)
 
 
 def render_html(posters: List, conference: str = "", images: Optional[dict] = None,
@@ -144,7 +153,8 @@ def render_html(posters: List, conference: str = "", images: Optional[dict] = No
 
     `images` maps a poster's image path to whatever the page should load - a
     relative path to a thumbnail, or a data URI. See thumbs.prepare. `originals`
-    maps it to the full photo, which is what a click on the image opens.
+    maps it to the full photo, which is what a click on the image opens - see
+    thumbs.photos.
     """
     images = images or {}
     originals = originals or {}
@@ -198,6 +208,7 @@ def render_html(posters: List, conference: str = "", images: Optional[dict] = No
                 parts.append("<p class=meta>Paper not found</p>")
             parts.append("<p class=tag>%s</p>" % e(Path(poster.image).name))
             parts.append("</div></article>")
+    parts.append(_FOOTER)
     parts.append("</main></html>")
     return "\n".join(parts)
 

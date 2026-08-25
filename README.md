@@ -92,7 +92,9 @@ report/
 ├── report.md            same content as Markdown
 ├── report.json          every field, including all the provenance
 ├── unmatched.csv        the posters with no paper — fill in links, then --merge
-├── thumbs/                 the images the HTML report shows; a click opens the full photo
+├── thumbs/              the images the HTML report shows
+├── posters/             the full photos, compressed and named after the poster;
+│   └── superconducting-qubit-readout.jpg      this is what a click opens
 ├── organise-plan.txt    what --organise would do (dry run is the default)
 ├── photos/              only with --organise copy|move|symlink
 │   └── quantum-physics/superconducting-qubit-readout.jpg
@@ -121,15 +123,24 @@ python3 -m posterdeclutter report ./report --conference "ICML 2026"
 python3 -m posterdeclutter report ./report/report.json -o ./site
 ```
 
-Thumbnails are rebuilt as usual (`--thumbnails files|embed|none`); photos that
-have moved on disk are simply left unlinked.
+Thumbnails and the `posters/` copies are rebuilt as usual (`--thumbnails
+files|embed|none`) — including into a fresh `-o` folder, which is how you get a
+self-contained report to publish. Photos that have moved on disk are simply left
+unlinked.
 
 The HTML report shows each poster photo. `--thumbnails files` (the default)
 writes downscaled copies into `thumbs/` and links them, so the page stays small
 and the folder stays portable; `--thumbnails embed` inlines them for a single
-self-contained file; `--thumbnails none` leaves them out. Thumbnails are made
-with `sips`, which ships with macOS; without it the report links the full photos
-instead.
+self-contained file; `--thumbnails none` leaves them out.
+
+Clicking a thumbnail opens the whole photo — not the camera original but a copy
+in `posters/`, recompressed gently (2400px wide, quality 90: a 4 MB phone photo
+lands around 1 MB, still crisp enough to read the small print) and renamed after
+the poster rather than after whatever the phone called it. So the report folder
+is the thing you hand to someone else, and `IMG_4417.jpg` never appears in it.
+
+Both are made with `sips`, which ships with macOS; without it the report links
+the originals where they lie, as before.
 
 ## Filling the gaps by hand
 
@@ -171,7 +182,7 @@ only what is *still* missing, so the file shrinks as you work through it.
 |---|---|
 | `--organise plan\|copy\|move\|symlink` | file the photos by subfield and title. `plan` (default) only writes the plan |
 | `--merge <csv>` | apply manual links (see above) |
-| `--thumbnails files\|embed\|none` | poster images in the HTML report |
+| `--thumbnails files\|embed\|none` | poster images in the HTML report (`none` also skips `posters/`) |
 | `--conference "NeurIPS 2026"` | title for the report header |
 | `--threshold 0.72` | how sure a title match must be |
 | `--llm off\|api\|claude-cli\|codex-cli` | see below |
