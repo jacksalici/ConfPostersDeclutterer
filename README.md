@@ -1,5 +1,7 @@
 # Conference poster declutterer
 
+![cover](fixtures/declutterer.jpg)
+
 Point it at a folder of poster photographs from a conference. It reads the title
 off each photo, finds the paper in a scholarly index, and writes a report grouped
 by subfield — alongside a tidy copy of every photo, renamed and compressed.
