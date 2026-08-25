@@ -1028,9 +1028,14 @@ class TestPosterImagesInTheReport(unittest.TestCase):
         # A thumbnail must never be larger than the photo it stands in for.
         self.assertLessEqual(thumb.stat().st_size, Path(posters[0].image).stat().st_size * 2)
 
-        page = report.render_html(posters, images=images)
-        self.assertIn("<img loading=lazy src='%s'" % src, page)
+        page = report.render_html(posters, images=images, originals=thumbs.originals(posters, self.out))
+        full = thumbs.originals(posters, self.out)[posters[0].image]
+        self.assertNotEqual(full, src)
+        # The thumbnail is displayed, but a click opens the full photo.
+        self.assertIn("<a class=shot href='%s'><img loading=lazy src='%s'" % (full, src), page)
         self.assertIn("class=shot", page)
+        # Without an originals map the click falls back to the thumbnail itself.
+        self.assertIn("href='%s'" % src, report.render_html(posters, images=images))
 
     @unittest.skipUnless(thumbs.available(), "needs sips (macOS)")
     def test_embed_mode_produces_a_single_self_contained_page(self):

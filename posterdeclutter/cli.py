@@ -139,7 +139,8 @@ def cmd_run(args) -> int:
 
     report.write_json(posters, out / "report.json")
     report.write_markdown(posters, out / "report.md", args.conference)
-    report.write_html(posters, out / "report.html", args.conference, images)
+    report.write_html(posters, out / "report.html", args.conference, images,
+                      thumbs.originals(posters, out))
     for name in ("report.json", "report.md", "report.html"):
         log.detail("wrote %s (%d bytes)" % (out / name, (out / name).stat().st_size), indent=0)
 
@@ -196,7 +197,8 @@ def cmd_report(args) -> int:
 
     images = thumbs.prepare(posters, out, mode=args.thumbnails, log=log)
     report.write_markdown(posters, out / "report.md", args.conference)
-    report.write_html(posters, out / "report.html", args.conference, images)
+    report.write_html(posters, out / "report.html", args.conference, images,
+                      thumbs.originals(posters, out))
     for name in ("report.md", "report.html"):
         log.detail("wrote %s (%d bytes)" % (out / name, (out / name).stat().st_size), indent=0)
 

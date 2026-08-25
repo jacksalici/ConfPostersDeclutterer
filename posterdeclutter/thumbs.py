@@ -59,6 +59,16 @@ def as_data_uri(path: Path) -> Optional[str]:
     return "data:%s;base64,%s" % (kind, base64.b64encode(path.read_bytes()).decode("ascii"))
 
 
+def originals(posters: Sequence, out_dir: Path) -> Dict[str, str]:
+    """{poster image path: href to the full photo}, relative to the report."""
+    out = {}
+    for poster in posters:
+        path = Path(poster.image)
+        if path.exists():
+            out[poster.image] = os.path.relpath(path, out_dir)
+    return out
+
+
 def prepare(posters: Sequence, out_dir: Path, mode: str = "files",
             log: Optional[Log] = None) -> Dict[str, str]:
     """Make the thumbnails and return {poster image path: src for the report}.

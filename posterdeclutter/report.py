@@ -138,13 +138,16 @@ h2 { font-size:1.2rem; margin:2.6rem 0 .9rem; padding-bottom:.35rem;
 """
 
 
-def render_html(posters: List, conference: str = "", images: Optional[dict] = None) -> str:
+def render_html(posters: List, conference: str = "", images: Optional[dict] = None,
+                originals: Optional[dict] = None) -> str:
     """Same restraint as the Markdown: the paper, not the machinery.
 
     `images` maps a poster's image path to whatever the page should load - a
-    relative path to a thumbnail, or a data URI. See thumbs.prepare.
+    relative path to a thumbnail, or a data URI. See thumbs.prepare. `originals`
+    maps it to the full photo, which is what a click on the image opens.
     """
     images = images or {}
+    originals = originals or {}
     stats = _stats(posters)
     groups = cluster(posters)
     e = html.escape
@@ -174,7 +177,8 @@ def render_html(posters: List, conference: str = "", images: Optional[dict] = No
             parts.append("<article class='%s'>" % " ".join(classes))
             if shot:
                 parts.append("<a class=shot href='%s'><img loading=lazy src='%s' alt='%s'></a>"
-                             % (e(shot), e(shot), e(Path(poster.image).name)))
+                             % (e(originals.get(poster.image, shot)),
+                                e(shot), e(Path(poster.image).name)))
             parts.append("<div class=body>")
             parts.append("<h3>%s</h3>" % e(poster.title or "(no title recovered)"))
             if poster.work:
@@ -199,8 +203,9 @@ def render_html(posters: List, conference: str = "", images: Optional[dict] = No
 
 
 def write_html(posters: List, path: Path, conference: str = "",
-               images: Optional[dict] = None) -> Path:
-    path.write_text(render_html(posters, conference, images), encoding="utf-8")
+               images: Optional[dict] = None, originals: Optional[dict] = None) -> Path:
+    path.write_text(render_html(posters, conference, images, originals),
+                    encoding="utf-8")
     return path
 
 

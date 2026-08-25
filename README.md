@@ -92,7 +92,7 @@ report/
 ├── report.md            same content as Markdown
 ├── report.json          every field, including all the provenance
 ├── unmatched.csv        the posters with no paper — fill in links, then --merge
-├── thumbs/              the images the HTML report shows
+├── thumbs/                 the images the HTML report shows; a click opens the full photo
 ├── organise-plan.txt    what --organise would do (dry run is the default)
 ├── photos/              only with --organise copy|move|symlink
 │   └── quantum-physics/superconducting-qubit-readout.jpg
