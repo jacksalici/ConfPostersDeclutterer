@@ -1243,6 +1243,55 @@ class TestCLI(unittest.TestCase):
             self.assertTrue(page.startswith("<!doctype html>"))
             self.assertIn("Human-Computer Interaction", page)
 
+    def test_unmatched_posters_are_left_out_of_the_report_by_default(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            photos, out = self._prepared(Path(tmp))
+            base = ["run", str(photos), "-o", str(out), "--ocr", "sidecar", "--offline",
+                    "--quiet", "--sources", "arxiv,openalex,crossref"]
+            self.assertEqual(main(base), 0)
+            payload = json.loads((out / "report.json").read_text())
+            self.assertEqual(payload["stats"]["posters"], 5)
+            self.assertLess(payload["stats"]["linked"], payload["stats"]["posters"])
+
+            markdown = (out / "report.md").read_text()
+            page = (out / "report.html").read_text()
+            self.assertNotIn("Paper: not found", markdown)
+            self.assertNotIn("Paper not found", page)
+            self.assertNotIn("An Ethnography of Poster Sessions", markdown)
+            self.assertNotIn("An Ethnography of Poster Sessions", page)
+            # unmatched.csv is unaffected either way - that is where they live now.
+            self.assertEqual(len(manual.read(out / "unmatched.csv")), 2)
+
+    def test_no_drop_unmatched_keeps_them_in_the_report(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            photos, out = self._prepared(Path(tmp))
+            base = ["run", str(photos), "-o", str(out), "--ocr", "sidecar", "--offline",
+                    "--quiet", "--sources", "arxiv,openalex,crossref", "--no-drop-unmatched"]
+            self.assertEqual(main(base), 0)
+            markdown = (out / "report.md").read_text()
+            page = (out / "report.html").read_text()
+            self.assertIn("Paper: not found", markdown)
+            self.assertIn("Paper not found", page)
+            self.assertIn("An Ethnography of Poster Sessions", markdown)
+            self.assertIn("An Ethnography of Poster Sessions", page)
+
+    def test_the_report_command_also_respects_drop_unmatched(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            photos, out = self._prepared(Path(tmp))
+            base = ["run", str(photos), "-o", str(out), "--ocr", "sidecar", "--offline",
+                    "--quiet", "--sources", "arxiv,openalex,crossref"]
+            self.assertEqual(main(base), 0)  # dropped by default
+            self.assertNotIn("An Ethnography of Poster Sessions",
+                             (out / "report.md").read_text())
+
+            self.assertEqual(main(["report", str(out), "--quiet", "--no-drop-unmatched"]), 0)
+            self.assertIn("An Ethnography of Poster Sessions",
+                          (out / "report.md").read_text())
+
+            self.assertEqual(main(["report", str(out), "--quiet"]), 0)  # back to the default
+            self.assertNotIn("An Ethnography of Poster Sessions",
+                             (out / "report.md").read_text())
+
     def test_the_report_command_accepts_the_json_path_directly_and_an_out_folder(self):
         with tempfile.TemporaryDirectory() as tmp:
             photos, out = self._prepared(Path(tmp))

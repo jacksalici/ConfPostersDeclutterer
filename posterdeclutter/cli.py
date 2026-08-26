@@ -29,6 +29,16 @@ def add_image_options(parser) -> None:
                              % images_mod.DEFAULT_QUALITY)
 
 
+def add_report_options(parser) -> None:
+    """A poster with no matched paper says "not found" and nothing else - useful
+    while chasing it down in unmatched.csv, dead weight in a report meant for
+    someone else. Dropped by default; --no-drop-unmatched keeps them in."""
+    # BooleanOptionalAction appends "(default: ...)" to the help text itself.
+    parser.add_argument("--drop-unmatched", action=argparse.BooleanOptionalAction, default=True,
+                        help="leave posters with no matched paper out of report.md and "
+                             "report.html; they still show up in unmatched.csv either way")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="posterdeclutter",
@@ -62,6 +72,7 @@ def build_parser() -> argparse.ArgumentParser:
                           "into <out>/posters as poster01.jpg and linked), embed (inlined, "
                           "for a single self-contained page), or none")
     add_image_options(run)
+    add_report_options(run)
     run.add_argument("--offline", action="store_true",
                      help="use only cached lookup responses; never touch the network")
     run.add_argument("--redo", choices=REDO_MODES, default="none",
@@ -95,6 +106,7 @@ def build_parser() -> argparse.ArgumentParser:
                             "into <out>/posters as poster01.jpg and linked), embed (inlined, "
                             "for a single self-contained page), or none")
     add_image_options(again)
+    add_report_options(again)
     noise = again.add_mutually_exclusive_group()
     noise.add_argument("-v", "--verbose", action="store_true",
                        help="say what is written where")
@@ -154,9 +166,14 @@ def cmd_run(args) -> int:
     shots = images_mod.prepare(posters, out, mode=args.images, width=args.image_width,
                                quality=args.image_quality, log=log)
 
+    shown = [p for p in posters if p.work] if args.drop_unmatched else posters
+    if args.drop_unmatched and len(shown) < len(posters):
+        log.detail("report: leaving out %d unmatched poster(s) (see unmatched.csv)"
+                   % (len(posters) - len(shown)), indent=0)
+
     report.write_json(posters, out / "report.json", shots)
-    report.write_markdown(posters, out / "report.md", args.conference, shots)
-    report.write_html(posters, out / "report.html", args.conference, shots)
+    report.write_markdown(shown, out / "report.md", args.conference, shots)
+    report.write_html(shown, out / "report.html", args.conference, shots)
     for name in ("report.json", "report.md", "report.html"):
         log.detail("wrote %s (%d bytes)" % (out / name, (out / name).stat().st_size), indent=0)
 
@@ -207,8 +224,12 @@ def cmd_report(args) -> int:
 
     shots = images_mod.prepare(posters, out, mode=args.images, width=args.image_width,
                                quality=args.image_quality, log=log)
-    report.write_markdown(posters, out / "report.md", args.conference, shots)
-    report.write_html(posters, out / "report.html", args.conference, shots)
+    shown = [p for p in posters if p.work] if args.drop_unmatched else posters
+    if args.drop_unmatched and len(shown) < len(posters):
+        log.detail("report: leaving out %d unmatched poster(s)"
+                   % (len(posters) - len(shown)), indent=0)
+    report.write_markdown(shown, out / "report.md", args.conference, shots)
+    report.write_html(shown, out / "report.html", args.conference, shots)
     for name in ("report.md", "report.html"):
         log.detail("wrote %s (%d bytes)" % (out / name, (out / name).stat().st_size), indent=0)
 

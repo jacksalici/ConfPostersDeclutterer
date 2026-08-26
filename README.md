@@ -196,6 +196,7 @@ only what is *still* missing, so the file shrinks as you work through it.
 | Flag | |
 |---|---|
 | `--merge <csv>` | apply manual links (see above) |
+| `--no-drop-unmatched` | keep "Paper not found" posters in report.md/report.html too (by default they are left out, but still listed in `unmatched.csv`); also available on `report` |
 | `--images files\|embed\|none` | poster images in the HTML report |
 | `--image-width 1800`, `--image-quality 85` | how hard to squeeze them (`--image-width 0` keeps the original size) |
 | `--conference "NeurIPS 2026"` | title for the report header |
